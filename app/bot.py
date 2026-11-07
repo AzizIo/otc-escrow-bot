@@ -1133,6 +1133,22 @@ def admin_main_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+def admin_balance_amount_keyboard(telegram_id: int, action: str) -> InlineKeyboardMarkup:
+    rows = []
+    for amount in ("10", "25", "50", "100", "250", "500"):
+        rows.append([ui_button(
+            text=f"💵 {amount} USDT",
+            callback_data=f"adminbalance:quick:{telegram_id}:{action}:{amount}",
+            style="success" if action == "credit" else "danger",
+        )])
+    rows.append([ui_button(text="⌨️ Другая сумма", callback_data="adminbalance:custom")])
+    rows.append([ui_button(
+        text="↩️ Вернуться к профилю",
+        callback_data=f"adminusers:select:{telegram_id}",
+    )])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def admin_user_keyboard(user: User) -> InlineKeyboardMarkup:
     status_action = "unblock" if user.is_blocked else "block"
     status_label = "🔓 Разблокировать" if user.is_blocked else "🚫 Заблокировать"
@@ -1521,8 +1537,11 @@ async def admin_user_action(callback: CallbackQuery, state: FSMContext) -> None:
         await state.set_state(AdminUserStates.balance_amount)
         await callback.answer()
         await callback.message.answer(
-            f"Введи сумму для {'начисления' if action == 'credit' else 'списания'} "
-            f"пользователю {telegram_id}."
+            f"💰 <b>{'Начисление' if action == 'credit' else 'Списание'} баланса</b>\\n\\n"
+            f"Пользователь: <code>{telegram_id}</code>\\n"
+            "Выбери сумму или введи свою.",
+            parse_mode="HTML",
+            reply_markup=admin_balance_amount_keyboard(telegram_id, action),
         )
         return
 
@@ -1538,6 +1557,42 @@ async def admin_user_action(callback: CallbackQuery, state: FSMContext) -> None:
         return
 
     await callback.answer("Неизвестное действие.", show_alert=True)
+
+
+@dp.callback_query(F.data == "adminbalance:custom")
+async def admin_balance_custom(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user.id != settings.superadmin_id:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    await state.set_state(AdminUserStates.balance_amount)
+    await callback.answer()
+    await callback.message.answer("⌨️ Введи сумму, например <code>25.50</code>.", parse_mode="HTML")
+
+
+@dp.callback_query(F.data.startswith("adminbalance:quick:"))
+async def admin_balance_quick(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user.id != settings.superadmin_id:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    try:
+        _, _, raw_id, action, raw_amount = callback.data.split(":")
+        telegram_id = int(raw_id)
+        amount = Decimal(raw_amount)
+        if action not in ("credit", "debit") or not amount.is_finite() or amount <= 0:
+            raise ValueError
+    except (ValueError, InvalidOperation):
+        await callback.answer("Некорректная сумма.", show_alert=True)
+        return
+    await state.update_data(
+        admin_target_id=telegram_id,
+        admin_balance_action=action,
+        admin_balance_amount=str(amount),
+    )
+    await state.set_state(AdminUserStates.balance_reason)
+    await callback.answer(f"Выбрано {amount:.2f} USDT.")
+    await callback.message.answer(
+        "📝 Укажи причину операции. Она попадёт в журнал баланса."
+    )
 
 
 @dp.message(AdminUserStates.balance_amount)
