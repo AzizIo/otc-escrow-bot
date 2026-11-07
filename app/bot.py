@@ -309,7 +309,7 @@ async def show_admin_users_page(message: Message, page: int = 0) -> None:
 
     rows = []
     for user in users:
-        title = (user.full_name or "Без имени").replace("\\n", " ").strip()[:25]
+        title = (user.full_name or "Без имени").replace("\n", " ").strip()[:25]
         handle = f"@{user.username}" if user.username else f"ID {user.telegram_id}"
         rows.append([ui_button(
             text=f"👤 {title} · {handle}"[:60],
@@ -326,9 +326,9 @@ async def show_admin_users_page(message: Message, page: int = 0) -> None:
     rows.append([ui_button(text="🏠 Админ-панель", callback_data="adminpanel:home")])
     await send_hero(
         message,
-        f"<b>👥 Пользователи платформы</b>\\n\\n"
-        f"Всего зарегистрировано: <b>{total}</b>\\n"
-        f"Страница: <b>{page + 1}/{pages}</b>\\n\\n"
+        f"<b>👥 Пользователи платформы</b>\n\n"
+        f"Всего зарегистрировано: <b>{total}</b>\n"
+        f"Страница: <b>{page + 1}/{pages}</b>\n\n"
         "Выбери пользователя или воспользуйся поиском.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
@@ -558,7 +558,7 @@ async def menu_home(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await send_hero(
         callback.message,
-        "<b>🔐 OTC ESCROW</b>\\n\\nВыбери нужный раздел:",
+        "<b>🔐 OTC ESCROW</b>\n\nВыбери нужный раздел:",
         reply_markup=main_menu(),
     )
 
@@ -594,7 +594,7 @@ async def menu_topup(callback: CallbackQuery, state: FSMContext) -> None:
         return
     await state.set_state(TopUp.amount)
     await callback.message.answer(
-        "➕ <b>Пополнение баланса</b>\\n\\n"
+        "➕ <b>Пополнение баланса</b>\n\n"
         "Выбери готовую сумму или введи свою (от 1 до 100 000 USDT). "
         "После оплаты Crypto Bot автоматически зачислит её на внутренний баланс.",
         parse_mode="HTML",
@@ -668,9 +668,9 @@ async def process_topup_amount(
         [ui_button(text="🏠 Главное меню", callback_data="menu:home")],
     ])
     await message.answer(
-        f"🧾 <b>Счёт на {amount:.2f} USDT создан</b>\\n\\n"
+        f"🧾 <b>Счёт на {amount:.2f} USDT создан</b>\n\n"
         "Оплати его по кнопке ниже. После подтверждения Crypto Bot баланс "
-        "зачислится автоматически.\\n"
+        "зачислится автоматически.\n"
         f"Номер счёта: <code>{invoice['invoice_id']}</code>",
         parse_mode="HTML",
         reply_markup=keyboard,
@@ -803,7 +803,7 @@ async def receive_deal_amount(message: Message, state: FSMContext) -> None:
     await state.update_data(amount=str(amount))
     await state.set_state(DealCreation.description)
     await message.answer(
-        "📝 <b>Шаг 3 из 3 — описание</b>\\n\\n"
+        "📝 <b>Шаг 3 из 3 — описание</b>\n\n"
         "Кратко опиши товар или услугу (до 1000 символов).",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -822,10 +822,10 @@ async def receive_deal_description(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     await state.set_state(DealCreation.confirm)
     await message.answer(
-        "🧾 <b>Проверь условия сделки</b>\\n\\n"
-        f"👤 Продавец: {html.escape(data.get('seller_label', str(data['seller_id'])))}\\n"
-        f"💰 Сумма: <b>{Decimal(data['amount']):.2f} USDT</b>\\n"
-        f"📦 Условия: {html.escape(description)}\\n\\n"
+        "🧾 <b>Проверь условия сделки</b>\n\n"
+        f"👤 Продавец: {html.escape(data.get('seller_label', str(data['seller_id'])))}\n"
+        f"💰 Сумма: <b>{Decimal(data['amount']):.2f} USDT</b>\n"
+        f"📦 Условия: {html.escape(description)}\n\n"
         "Всё верно? После подтверждения продавцу придёт уведомление.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -896,11 +896,11 @@ async def confirm_deal_creation(callback: CallbackQuery, state: FSMContext) -> N
     await callback.answer("Сделка создана.")
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer(
-        f"✅ <b>Сделка #{deal_id} создана</b>\\n\\n"
-        f"👤 Покупатель: {html.escape(buyer_name)}\\n"
-        f"👤 Продавец: {html.escape(seller_name)}\\n"
-        f"💰 Сумма: <b>{amount:.2f} USDT</b>\\n"
-        f"📦 Условия: {html.escape(description)}\\n\\n"
+        f"✅ <b>Сделка #{deal_id} создана</b>\n\n"
+        f"👤 Покупатель: {html.escape(buyer_name)}\n"
+        f"👤 Продавец: {html.escape(seller_name)}\n"
+        f"💰 Сумма: <b>{amount:.2f} USDT</b>\n"
+        f"📦 Условия: {html.escape(description)}\n\n"
         "⏳ Ожидаем ответа продавца.",
         parse_mode="HTML",
         reply_markup=main_menu(),
@@ -908,11 +908,11 @@ async def confirm_deal_creation(callback: CallbackQuery, state: FSMContext) -> N
     try:
         await callback.bot.send_message(
             int(data["seller_id"]),
-            f"🤝 <b>Вам предложена сделка #{deal_id}</b>\\n\\n"
-            f"👤 Покупатель: {html.escape(buyer_name)}\\n"
-            f"👤 Вы — продавец: {html.escape(seller_name)}\\n"
-            f"💰 Сумма: <b>{amount:.2f} USDT</b>\\n"
-            f"📦 Условия: {html.escape(description)}\\n\\n"
+            f"🤝 <b>Вам предложена сделка #{deal_id}</b>\n\n"
+            f"👤 Покупатель: {html.escape(buyer_name)}\n"
+            f"👤 Вы — продавец: {html.escape(seller_name)}\n"
+            f"💰 Сумма: <b>{amount:.2f} USDT</b>\n"
+            f"📦 Условия: {html.escape(description)}\n\n"
             "Выберите действие:",
             parse_mode="HTML",
             reply_markup=deal_keyboard(deal_id, "accept", "cancel"),
@@ -966,11 +966,11 @@ async def deal_action(callback: CallbackQuery) -> None:
             await callback.message.edit_reply_markup(reply_markup=None)
             await callback.bot.send_message(
                 buyer_id,
-                f"🤝 <b>Продавец принял сделку #{deal_id}</b>\\n\\n"
-                f"👤 Покупатель: {html.escape(buyer_name)}\\n"
-                f"👤 Продавец: {html.escape(seller_name)}\\n"
-                f"💰 Сумма: {deal_amount:.2f} USDT\\n"
-                f"📦 Условия: {html.escape(deal_description)}\\n\\n"
+                f"🤝 <b>Продавец принял сделку #{deal_id}</b>\n\n"
+                f"👤 Покупатель: {html.escape(buyer_name)}\n"
+                f"👤 Продавец: {html.escape(seller_name)}\n"
+                f"💰 Сумма: {deal_amount:.2f} USDT\n"
+                f"📦 Условия: {html.escape(deal_description)}\n\n"
                 "Теперь зарезервируйте сумму.",
                 parse_mode="HTML",
                 reply_markup=deal_keyboard(deal_id, "fund", "cancel"),
@@ -979,29 +979,29 @@ async def deal_action(callback: CallbackQuery) -> None:
             await callback.message.edit_reply_markup(reply_markup=None)
             await callback.bot.send_message(
                 seller_id,
-                f"🔒 <b>Средства по сделке #{deal_id} зарезервированы</b>\\n\\n"
-                f"👤 Покупатель: {html.escape(buyer_name)}\\n"
-                f"👤 Продавец: {html.escape(seller_name)}\\n"
-                f"💰 Сумма: {deal_amount:.2f} USDT\\n"
-                f"📦 Условия: {html.escape(deal_description)}\\n\\n"
+                f"🔒 <b>Средства по сделке #{deal_id} зарезервированы</b>\n\n"
+                f"👤 Покупатель: {html.escape(buyer_name)}\n"
+                f"👤 Продавец: {html.escape(seller_name)}\n"
+                f"💰 Сумма: {deal_amount:.2f} USDT\n"
+                f"📦 Условия: {html.escape(deal_description)}\n\n"
                 "Выполните обязательства и отметьте это кнопкой ниже.",
                 parse_mode="HTML",
                 reply_markup=deal_keyboard(deal_id, "delivered", "dispute"),
             )
             await callback.bot.send_message(
                 buyer_id,
-                f"🔒 Сумма по сделке #{deal_id} находится в резерве.\\n"
-                f"👤 Продавец: {html.escape(seller_name)}\\n"
+                f"🔒 Сумма по сделке #{deal_id} находится в резерве.\n"
+                f"👤 Продавец: {html.escape(seller_name)}\n"
                 f"💰 {deal_amount:.2f} USDT"
             )
         elif action == "delivered":
             await callback.message.edit_reply_markup(reply_markup=None)
             await callback.bot.send_message(
                 buyer_id,
-                f"📦 <b>Продавец отметил выполнение сделки #{deal_id}</b>\\n\\n"
-                f"👤 Продавец: {html.escape(seller_name)}\\n"
-                f"💰 Сумма: {deal_amount:.2f} USDT\\n"
-                f"📦 Условия: {html.escape(deal_description)}\\n\\n"
+                f"📦 <b>Продавец отметил выполнение сделки #{deal_id}</b>\n\n"
+                f"👤 Продавец: {html.escape(seller_name)}\n"
+                f"💰 Сумма: {deal_amount:.2f} USDT\n"
+                f"📦 Условия: {html.escape(deal_description)}\n\n"
                 "Проверь результат и подтверди получение.",
                 parse_mode="HTML",
                 reply_markup=deal_keyboard(deal_id, "confirm", "dispute"),
@@ -1011,10 +1011,10 @@ async def deal_action(callback: CallbackQuery) -> None:
             for telegram_id in {buyer_id, seller_id}:
                 await callback.bot.send_message(
                     telegram_id,
-                    f"✅ <b>Сделка #{deal_id} завершена</b>\\n\\n"
-                    f"👤 Покупатель: {html.escape(buyer_name)}\\n"
-                    f"👤 Продавец: {html.escape(seller_name)}\\n"
-                    f"💰 Сумма: {deal_amount:.2f} USDT\\n"
+                    f"✅ <b>Сделка #{deal_id} завершена</b>\n\n"
+                    f"👤 Покупатель: {html.escape(buyer_name)}\n"
+                    f"👤 Продавец: {html.escape(seller_name)}\n"
+                    f"💰 Сумма: {deal_amount:.2f} USDT\n"
                     "Средства зачислены продавцу.",
                     parse_mode="HTML",
                 )
@@ -1489,9 +1489,9 @@ async def admin_user_action(callback: CallbackQuery, state: FSMContext) -> None:
                 buyer = participants.get(deal.buyer_id)
                 seller = participants.get(deal.seller_id)
                 lines.append(
-                    f"🤝 #{deal.id} · {deal.amount:.2f} USDT · {deal.status}\\n"
-                    f"Покупатель: {user_label(buyer) if buyer else deal.buyer_id}\\n"
-                    f"Продавец: {user_label(seller) if seller else deal.seller_id}\\n"
+                    f"🤝 #{deal.id} · {deal.amount:.2f} USDT · {deal.status}\n"
+                    f"Покупатель: {user_label(buyer) if buyer else deal.buyer_id}\n"
+                    f"Продавец: {user_label(seller) if seller else deal.seller_id}\n"
                     f"Условия: {deal.description[:100]}"
                 )
             await callback.message.answer("\n\n".join(lines))
