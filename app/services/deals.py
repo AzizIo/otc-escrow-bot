@@ -183,13 +183,26 @@ async def admin_resolve(
     if deal.status not in (DealStatus.DISPUTED, DealStatus.DELIVERED, DealStatus.FUNDED):
         raise ValueError("Администратор может разрешить только активную или спорную сделку.")
 
-    buyer_account = await _locked_account(session, deal.buyer_id)
+    locked_accounts = list(
+        (
+            await session.scalars(
+                select(Account)
+                .where(Account.user_id.in_([deal.buyer_id, deal.seller_id]))
+                .order_by(Account.user_id)
+                .with_for_update()
+            )
+        ).all()
+    )
+    accounts_by_user = {account.user_id: account for account in locked_accounts}
+    buyer_account = accounts_by_user.get(deal.buyer_id)
+    seller_account = accounts_by_user.get(deal.seller_id)
+    if buyer_account is None or seller_account is None:
+        raise ValueError("У одного из участников не создан счёт.")
     if buyer_account.frozen < deal.amount:
         raise ValueError("Ошибка учёта: у покупателя недостаточно замороженных средств.")
 
     buyer_account.frozen -= deal.amount
     if release_to_seller:
-        seller_account = await _locked_account(session, deal.seller_id)
         seller_account.available += deal.amount
         deal.status = DealStatus.COMPLETED
         kind = "deal_release"
