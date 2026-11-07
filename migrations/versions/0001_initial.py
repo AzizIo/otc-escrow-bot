@@ -59,10 +59,24 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
     )
     op.create_index("ix_ledger_entries_account_id", "ledger_entries", ["account_id"])
+    op.execute("""
+        CREATE FUNCTION prevent_ledger_mutation() RETURNS trigger AS $
+        BEGIN
+            RAISE EXCEPTION 'ledger_entries are append-only';
+        END;
+        $ LANGUAGE plpgsql;
+    """)
+    op.execute("""
+        CREATE TRIGGER ledger_entries_immutable
+        BEFORE UPDATE OR DELETE ON ledger_entries
+        FOR EACH ROW EXECUTE FUNCTION prevent_ledger_mutation();
+    """)
 
 
 def downgrade() -> None:
     op.drop_index("ix_ledger_entries_account_id", table_name="ledger_entries")
+    op.execute("DROP TRIGGER IF EXISTS ledger_entries_immutable ON ledger_entries")
+    op.execute("DROP FUNCTION IF EXISTS prevent_ledger_mutation()")
     op.drop_table("ledger_entries")
     op.drop_index("ix_deals_seller_id", table_name="deals")
     op.drop_index("ix_deals_buyer_id", table_name="deals")
