@@ -64,6 +64,8 @@ async def accept_deal(session: AsyncSession, *, deal_id: int, actor_telegram_id:
     seller = await session.get(User, deal.seller_id)
     if seller is None or seller.telegram_id != actor_telegram_id:
         raise ValueError("Принять эту сделку может только указанный продавец.")
+    if seller.is_blocked:
+        raise ValueError("Ваш аккаунт заблокирован. Действие недоступно.")
     if deal.status != DealStatus.AWAITING_SELLER:
         raise ValueError("Сделка уже обработана или больше не ожидает продавца.")
     deal.status = DealStatus.AWAITING_FUNDING
@@ -75,6 +77,8 @@ async def fund_deal(session: AsyncSession, *, deal_id: int, actor_telegram_id: i
     buyer = await session.get(User, deal.buyer_id)
     if buyer is None or buyer.telegram_id != actor_telegram_id:
         raise ValueError("Пополнить гарантию может только покупатель.")
+    if buyer.is_blocked:
+        raise ValueError("Ваш аккаунт заблокирован. Действие недоступно.")
     if deal.status != DealStatus.AWAITING_FUNDING:
         raise ValueError("Сделка пока не ожидает резервирования средств.")
 
@@ -109,6 +113,8 @@ async def mark_delivered(
     seller = await session.get(User, deal.seller_id)
     if seller is None or seller.telegram_id != actor_telegram_id:
         raise ValueError("Подтвердить отправку может только продавец.")
+    if seller.is_blocked:
+        raise ValueError("Ваш аккаунт заблокирован. Действие недоступно.")
     if deal.status != DealStatus.FUNDED:
         raise ValueError("Сделка не находится на этапе исполнения.")
     deal.status = DealStatus.DELIVERED
@@ -122,6 +128,8 @@ async def confirm_deal(
     buyer = await session.get(User, deal.buyer_id)
     if buyer is None or buyer.telegram_id != actor_telegram_id:
         raise ValueError("Завершить сделку может только покупатель.")
+    if buyer.is_blocked:
+        raise ValueError("Ваш аккаунт заблокирован. Действие недоступно.")
     if deal.status != DealStatus.DELIVERED:
         raise ValueError("Продавец ещё не отметил выполнение сделки.")
 
@@ -180,6 +188,8 @@ async def open_dispute(
     actor = await session.scalar(select(User).where(User.telegram_id == actor_telegram_id))
     if actor is None or actor.id not in (deal.buyer_id, deal.seller_id):
         raise ValueError("Открыть спор могут только участники сделки.")
+    if actor.is_blocked:
+        raise ValueError("Ваш аккаунт заблокирован. Действие недоступно.")
     if deal.status not in (DealStatus.FUNDED, DealStatus.DELIVERED):
         raise ValueError("Спор можно открыть после резервирования средств.")
     deal.status = DealStatus.DISPUTED
@@ -193,6 +203,8 @@ async def cancel_deal(
     actor = await session.scalar(select(User).where(User.telegram_id == actor_telegram_id))
     if actor is None or actor.id not in (deal.buyer_id, deal.seller_id):
         raise ValueError("Отменить сделку могут только её участники.")
+    if actor.is_blocked:
+        raise ValueError("Ваш аккаунт заблокирован. Действие недоступно.")
     if deal.status not in (DealStatus.AWAITING_SELLER, DealStatus.AWAITING_FUNDING):
         raise ValueError("После резервирования средств отмена доступна только через спор.")
     deal.status = DealStatus.CANCELLED
