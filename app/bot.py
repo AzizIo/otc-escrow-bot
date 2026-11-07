@@ -1,3 +1,4 @@
+import asyncio
 from decimal import Decimal, InvalidOperation
 from datetime import UTC, date, datetime, time
 import html
@@ -7,6 +8,7 @@ import re
 import aiohttp
 
 from aiogram import F, Bot, Dispatcher
+from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.types import (
@@ -23,7 +25,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import settings
 from app.db import SessionFactory
-from app.models import Account, Deal, User, UserAdminAudit
+from app.models import Account, AppSetting, Deal, User, UserAdminAudit
 from app.services.deals import (
     accept_deal,
     admin_resolve,
@@ -155,6 +157,9 @@ class CryptoPayAdmin(StatesGroup):
 
 
 class AdminUserStates(StatesGroup):
+    broadcast_text = State()
+    broadcast_confirm = State()
+    subscription_channel = State()
     search = State()
     balance_amount = State()
     balance_reason = State()
@@ -1274,6 +1279,8 @@ def admin_main_keyboard() -> InlineKeyboardMarkup:
         [ui_button(text="👥 Пользователи", callback_data="adminpanel:find")],
         [ui_button(text="📊 Общая статистика", callback_data="adminpanel:stats")],
         [ui_button(text="⚙️ Crypto Pay", callback_data="adminpanel:cryptopay")],
+        [ui_button(text="📣 Рассылка", callback_data="adminpanel:broadcast")],
+        [ui_button(text="🔐 Обязательная подписка", callback_data="adminpanel:subscription")],
     ])
 
 
