@@ -10,7 +10,7 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
-    InlineKeyboardButton,
+    InlineKeyboardButton as TelegramInlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
 )
@@ -43,6 +43,64 @@ from app.services.crypto_pay import (
 )
 dp = Dispatcher()
 
+# Shared visual style. Telegram loads the banner from a public CDN.
+BRAND_BANNER_URL = (
+    "https://images.unsplash.com/photo-1639762681485-074b7f938ba0"
+    "?auto=format&fit=crop&w=1280&h=720&q=85"
+)
+
+
+def ui_button(
+    *,
+    text: str,
+    callback_data: str | None = None,
+    url: str | None = None,
+    style: str | None = None,
+) -> TelegramInlineKeyboardButton:
+    """Create consistently styled Telegram Bot API 9.4 buttons."""
+    action = f"{text} {callback_data or ''}".lower()
+    if style is None:
+        danger_words = (
+            "cancel", "refund", "remove", "block", "debit", "dispute",
+            "отмен", "возврат", "отключ", "блок", "списать", "спор", "удал",
+        )
+        success_words = (
+            "accept", "fund", "delivered", "confirm", "release", "credit",
+            "принять", "зарезерв", "подтверд", "выплат", "начислить",
+        )
+        if any(word in action for word in danger_words):
+            style = "danger"
+        elif any(word in action for word in success_words):
+            style = "success"
+        else:
+            style = "primary"
+    return Telegramui_button(
+        text=text,
+        callback_data=callback_data,
+        url=url,
+        style=style,
+    )
+
+
+async def send_hero(
+    message: Message,
+    caption: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> None:
+    """Send a branded image header, gracefully falling back to text."""
+    try:
+        await message.answer_photo(
+            photo=BRAND_BANNER_URL,
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=reply_markup,
+        )
+    except TelegramAPIError:
+        logging.getLogger(__name__).warning(
+            "Could not load the branded banner; falling back to text."
+        )
+        await message.answer(caption, parse_mode="HTML", reply_markup=reply_markup)
+
 
 class TopUp(StatesGroup):
     amount = State()
@@ -72,13 +130,13 @@ class DealCreation(StatesGroup):
 def main_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🤝 Создать сделку", callback_data="menu:create")],
+            [ui_button(text="🤝 Создать сделку", callback_data="menu:create")],
             [
-                InlineKeyboardButton(text="💰 Мой баланс", callback_data="menu:balance"),
-                InlineKeyboardButton(text="📋 Мои сделки", callback_data="menu:deals"),
+                ui_button(text="💰 Мой баланс", callback_data="menu:balance"),
+                ui_button(text="📋 Мои сделки", callback_data="menu:deals"),
             ],
-            [InlineKeyboardButton(text="➕ Пополнить баланс", callback_data="menu:topup")],
-            [InlineKeyboardButton(text="ℹ️ Помощь", callback_data="menu:help")],
+            [ui_button(text="➕ Пополнить баланс", callback_data="menu:topup")],
+            [ui_button(text="ℹ️ Помощь", callback_data="menu:help")],
         ]
     )
 
@@ -86,9 +144,9 @@ def main_menu() -> InlineKeyboardMarkup:
 def deal_creation_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Создать сделку", callback_data="create:confirm")],
-            [InlineKeyboardButton(text="✏️ Изменить описание", callback_data="create:edit")],
-            [InlineKeyboardButton(text="✖️ Отмена", callback_data="create:cancel")],
+            [ui_button(text="✅ Создать сделку", callback_data="create:confirm")],
+            [ui_button(text="✏️ Изменить описание", callback_data="create:edit")],
+            [ui_button(text="✖️ Отмена", callback_data="create:cancel")],
         ]
     )
 
@@ -104,7 +162,7 @@ def deal_keyboard(deal_id: int, *actions: str) -> InlineKeyboardMarkup:
     }
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=labels[action], callback_data=f"deal:{action}:{deal_id}")]
+            [ui_button(text=labels[action], callback_data=f"deal:{action}:{deal_id}")]
             for action in actions
         ]
     )
@@ -113,8 +171,8 @@ def deal_keyboard(deal_id: int, *actions: str) -> InlineKeyboardMarkup:
 def admin_deal_keyboard(deal_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="💸 Выплатить продавцу", callback_data=f"admin:release:{deal_id}")],
-            [InlineKeyboardButton(text="↩️ Вернуть покупателю", callback_data=f"admin:refund:{deal_id}")],
+            [ui_button(text="💸 Выплатить продавцу", callback_data=f"admin:release:{deal_id}")],
+            [ui_button(text="↩️ Вернуть покупателю", callback_data=f"admin:refund:{deal_id}")],
         ]
     )
 
@@ -165,116 +223,15 @@ async def start(message: Message) -> None:
 @dp.message(Command("menu"))
 async def show_menu(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await message.answer("Главное меню:", reply_markup=main_menu())
-
-
-@dp.message(Command("balance"))
-async def balance(message: Message) -> None:
-    async with SessionFactory() as session:
-        account = await session.scalar(
-            select(Account).join(User, User.id == Account.user_id)
-            .where(User.telegram_id == message.from_user.id)
-        )
-        if account is None:
-            await message.answer("Сначала отправь /start.")
-            return
-        await message.answer(
-            f"Доступно: {account.available:.2f} {account.currency}\n"
-            f"В резерве: {account.frozen:.2f} {account.currency}",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="➕ Пополнить баланс", callback_data="menu:topup")]
-            ]),
-        )
-
-
-@dp.message(Command("my_deals"))
-async def my_deals(message: Message) -> None:
-    status_labels = {
-        "awaiting_seller": "Ожидает продавца",
-        "awaiting_funding": "Ожидает резерва",
-        "funded": "Средства в резерве",
-        "delivered": "Ожидает подтверждения",
-        "completed": "Завершена",
-        "cancelled": "Отменена",
-        "disputed": "Спор",
-        "refunded": "Возвращена",
-    }
-    async with SessionFactory() as session:
-        user = await session.scalar(
-            select(User).where(User.telegram_id == message.from_user.id)
-        )
-        if user is None:
-            await message.answer("Сначала отправь /start.")
-            return
-        deals = list(
-            (
-                await session.scalars(
-                    select(Deal)
-                    .where(or_(Deal.buyer_id == user.id, Deal.seller_id == user.id))
-                    .order_by(Deal.created_at.desc())
-                    .limit(10)
-                )
-            ).all()
-        )
-    if not deals:
-        await message.answer("У тебя пока нет сделок.")
-        return
-    lines = ["Последние сделки:"]
-    for deal in deals:
-        role = "Покупатель" if deal.buyer_id == user.id else "Продавец"
-        status = status_labels.get(deal.status, deal.status)
-        lines.append(
-            f"#{deal.id} · {deal.amount:.2f} USDT · {role}\n"
-            f"{status} · {deal.description[:80]}"
-        )
-    await message.answer("\n\n".join(lines))
-
-
-async def _adjust_balance(message: Message, *, credit: bool) -> None:
-    if message.from_user.id != settings.superadmin_id:
-        await message.answer("⛔ Эта команда доступна только администратору.")
-        return
-    parts = (message.text or "").split(maxsplit=3)
-    if len(parts) != 4:
-        action = "credit" if credit else "debit"
-        await message.answer(f"Формат: /{action} TELEGRAM_ID СУММА ПРИЧИНА")
-        return
-    try:
-        target_id = int(parts[1])
-        amount = Decimal(parts[2])
-        if target_id <= 0 or not amount.is_finite() or amount <= 0:
-            raise ValueError("Проверьте Telegram ID и сумму.")
-        async with SessionFactory() as session, session.begin():
-            await admin_adjust(
-                session, target_telegram_id=target_id,
-                actor_telegram_id=message.from_user.id, amount=amount,
-                credit=credit, reason=parts[3],
-            )
-    except (ValueError, InvalidOperation) as exc:
-        await message.answer(f"Не удалось выполнить операцию: {exc}")
-        return
-    verb = "начислено" if credit else "списано"
-    await message.answer(f"✅ {verb.capitalize()} {amount:.2f} USDT пользователю {target_id}.")
-
-
-@dp.message(Command("credit"))
-async def credit(message: Message) -> None:
-    await _adjust_balance(message, credit=True)
-
-
-@dp.message(Command("debit"))
-async def debit(message: Message) -> None:
-    await _adjust_balance(message, credit=False)
-
-
-async def begin_deal_creation(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    await state.set_state(DealCreation.seller_id)
-    await message.answer(
-        "🤝 Создание сделки\n\n"
-        "Шаг 1 из 3 — отправь Telegram ID продавца.\n"
-        "Продавец должен предварительно запустить бота через /start.\n\n"
-        "Для отмены отправь /cancel."
+    await send_hero(
+        message,
+        "<b>🛡 OTC ESCROW</b>\\n\\n"
+        "Площадка для координации OTC-сделок: создание предложений, резервирование "
+        "внутреннего баланса и подтверждение выполнения.\\n\\n"
+        "💡 Баланс в USDT — внутренняя единица учёта, не криптокошелёк и не "
+        "on-chain escrow.\\n\\n"
+        "<b>Выбери действие:</b>",
+        reply_markup=main_menu(),
     )
 
 
@@ -360,8 +317,8 @@ async def receive_topup_amount(message: Message, state: FSMContext) -> None:
         await message.answer("Crypto Bot не вернул ссылку на оплату. Обратись к администратору.")
         return
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Оплатить через Crypto Bot", url=invoice_url)],
-        [InlineKeyboardButton(text="💰 Проверить баланс", callback_data="menu:balance")],
+        [ui_button(text="💳 Оплатить через Crypto Bot", url=invoice_url)],
+        [ui_button(text="💰 Проверить баланс", callback_data="menu:balance")],
     ])
     await message.answer(
         f"Счёт на {amount:.2f} USDT создан.\n"
@@ -714,9 +671,9 @@ async def resolve_refund(message: Message) -> None:
 
 def admin_main_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔎 Найти пользователя", callback_data="adminpanel:find")],
-        [InlineKeyboardButton(text="📊 Общая статистика", callback_data="adminpanel:stats")],
-        [InlineKeyboardButton(text="⚙️ Crypto Pay", callback_data="adminpanel:cryptopay")],
+        [ui_button(text="🔎 Найти пользователя", callback_data="adminpanel:find")],
+        [ui_button(text="📊 Общая статистика", callback_data="adminpanel:stats")],
+        [ui_button(text="⚙️ Crypto Pay", callback_data="adminpanel:cryptopay")],
     ])
 
 
@@ -724,13 +681,13 @@ def admin_user_keyboard(user: User) -> InlineKeyboardMarkup:
     status_action = "unblock" if user.is_blocked else "block"
     status_label = "🔓 Разблокировать" if user.is_blocked else "🚫 Заблокировать"
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Изменить показатели профиля", callback_data=f"adminuser:edit:{user.telegram_id}")],
-        [InlineKeyboardButton(text="➕ Начислить баланс", callback_data=f"adminuser:credit:{user.telegram_id}"),
-         InlineKeyboardButton(text="➖ Списать баланс", callback_data=f"adminuser:debit:{user.telegram_id}")],
-        [InlineKeyboardButton(text=status_label, callback_data=f"adminuser:{status_action}:{user.telegram_id}")],
-        [InlineKeyboardButton(text="📋 Последние сделки", callback_data=f"adminuser:deals:{user.telegram_id}")],
-        [InlineKeyboardButton(text="🧾 История изменений", callback_data=f"adminuser:audit:{user.telegram_id}")],
-        [InlineKeyboardButton(text="⬅️ Админ-панель", callback_data="adminpanel:home")],
+        [ui_button(text="✏️ Изменить показатели профиля", callback_data=f"adminuser:edit:{user.telegram_id}")],
+        [ui_button(text="➕ Начислить баланс", callback_data=f"adminuser:credit:{user.telegram_id}"),
+         ui_button(text="➖ Списать баланс", callback_data=f"adminuser:debit:{user.telegram_id}")],
+        [ui_button(text=status_label, callback_data=f"adminuser:{status_action}:{user.telegram_id}")],
+        [ui_button(text="📋 Последние сделки", callback_data=f"adminuser:deals:{user.telegram_id}")],
+        [ui_button(text="🧾 История изменений", callback_data=f"adminuser:audit:{user.telegram_id}")],
+        [ui_button(text="⬅️ Админ-панель", callback_data="adminpanel:home")],
     ])
 
 
@@ -801,8 +758,9 @@ async def admin_panel_home(callback: CallbackQuery, state: FSMContext) -> None:
         return
     await state.clear()
     await callback.answer()
-    await callback.message.answer(
-        "🛠 Панель администратора\nВыбери действие:",
+    await send_hero(
+        callback.message,
+        "<b>⚙️ ADMIN CONTROL</b>\\n\\nВыбери раздел управления:",
         reply_markup=admin_main_keyboard(),
     )
 
@@ -816,17 +774,17 @@ async def admin_crypto_pay_settings(callback: CallbackQuery, state: FSMContext) 
     configured = await has_crypto_pay_token()
     status = "🟢 Подключён" if configured else "🔴 Не настроен"
     keyboard = [
-        [InlineKeyboardButton(
+        [ui_button(
             text="🔑 Добавить / заменить токен",
             callback_data="admincryptopay:set",
         )],
     ]
     if configured:
-        keyboard.append([InlineKeyboardButton(
+        keyboard.append([ui_button(
             text="🗑 Отключить Crypto Pay",
             callback_data="admincryptopay:remove",
         )])
-    keyboard.append([InlineKeyboardButton(
+    keyboard.append([ui_button(
         text="⬅️ Админ-панель", callback_data="adminpanel:home"
     )])
     await callback.answer()
@@ -1215,14 +1173,11 @@ async def admin_profile_reason(message: Message, state: FSMContext) -> None:
 @dp.message(Command("admin"))
 async def admin_help(message: Message, state: FSMContext) -> None:
     if message.from_user.id != settings.superadmin_id:
-        await message.answer("⛔ Нет доступа.")
-        return
-    await state.clear()
-    await message.answer(
-        "🛠 Панель администратора\n\n"
-        "Здесь можно искать пользователей, смотреть фактическую статистику, "
-        "управлять балансом, блокировкой и отображаемыми показателями профиля.\n\n"
-        "Ручные корректировки отмечаются отдельно и попадают в журнал.",
+        await send_hero(
+        message,
+        "<b>⚙️ ADMIN CONTROL</b>\\n\\n"
+        "Управление пользователями, балансами, статистикой и настройками платежей.\\n\\n"
+        "🧾 Все ручные корректировки фиксируются в журнале администратора.",
         reply_markup=admin_main_keyboard(),
     )
 
