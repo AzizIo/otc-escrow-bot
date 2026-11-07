@@ -48,6 +48,14 @@ BRAND_BANNER_URL = (
     "https://images.unsplash.com/photo-1639762681485-074b7f938ba0"
     "?auto=format&fit=crop&w=1280&h=720&q=85"
 )
+DEAL_BANNER_URL = (
+    "https://images.unsplash.com/photo-1554224155-8d04cb21cd6c"
+    "?auto=format&fit=crop&w=1280&h=720&q=85"
+)
+ADMIN_BANNER_URL = (
+    "https://images.unsplash.com/photo-1460925895917-afdab827c52f"
+    "?auto=format&fit=crop&w=1280&h=720&q=85"
+)
 
 # Custom emoji IDs from Telegram's public News Emoji pack.
 # Unicode fallbacks are used when the bot owner does not have Telegram Premium.
@@ -104,11 +112,12 @@ async def send_hero(
     message: Message,
     caption: str,
     reply_markup: InlineKeyboardMarkup | None = None,
+    photo_url: str = BRAND_BANNER_URL,
 ) -> None:
     """Send a branded image header, with fallbacks for older accounts/clients."""
     try:
         await message.answer_photo(
-            photo=BRAND_BANNER_URL,
+            photo=photo_url,
             caption=caption,
             parse_mode="HTML",
             reply_markup=reply_markup,
@@ -121,7 +130,7 @@ async def send_hero(
         )
         try:
             await message.answer_photo(
-                photo=BRAND_BANNER_URL,
+                photo=photo_url,
                 caption=plain_caption,
                 parse_mode="HTML",
                 reply_markup=reply_markup,
@@ -283,6 +292,7 @@ async def show_seller_picker(
         "или найди его по Telegram ID / @username.\n\n"
         "🔐 Продавец должен хотя бы один раз открыть этого бота.",
         reply_markup=seller_picker_keyboard(users),
+        photo_url=DEAL_BANNER_URL,
     )
 
 
@@ -331,6 +341,7 @@ async def show_admin_users_page(message: Message, page: int = 0) -> None:
         f"Страница: <b>{page + 1}/{pages}</b>\n\n"
         "Выбери пользователя или воспользуйся поиском.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        photo_url=ADMIN_BANNER_URL,
     )
 
 
@@ -1235,6 +1246,7 @@ async def admin_panel_home(callback: CallbackQuery, state: FSMContext) -> None:
         callback.message,
         f'<b>{news_emoji("stats")} ADMIN CONTROL</b>\n\nВыбери раздел управления:',
         reply_markup=admin_main_keyboard(),
+        photo_url=ADMIN_BANNER_URL,
     )
 
 
