@@ -154,27 +154,35 @@ async def new_deal(message: Message) -> None:
         amount = Decimal(parts[2])
         async with SessionFactory() as session, session.begin():
             deal = await create_deal(
-                session, buyer_telegram_id=message.from_user.id,
-                seller_telegram_id=seller_id, amount=amount, description=parts[3],
+                session,
+                buyer_telegram_id=message.from_user.id,
+                seller_telegram_id=seller_id,
+                amount=amount,
+                description=parts[3],
             )
-            deal_id = deal.id
-            deal_amount = deal.amount
-            description = deal.description
-        await message.answer(
-            f"Сделка #{deal_id} создана. Ожидаем принятия продавцом.\n"
-            f"Сумма: {deal_amount:.2f} USDT\nОписание: {description}"
-        )
+            deal_id, deal_amount, description = deal.id, deal.amount, deal.description
+    except (ValueError, InvalidOperation) as exc:
+        await message.answer(f"Не удалось создать сделку: {exc}")
+        return
+    except Exception:
+        await message.answer("Ошибка базы данных. Сделка не создана, попробуйте позже.")
+        return
+
+    await message.answer(
+        f"Сделка #{deal_id} создана. Ожидаем принятия продавцом.\n"
+        f"Сумма: {deal_amount:.2f} USDT\nОписание: {description}"
+    )
+    try:
         await message.bot.send_message(
             seller_id,
             f"Вам предложена сделка #{deal_id}.\nСумма: {deal_amount:.2f} USDT\n"
             f"Описание: {description}\n\nПримите или отклоните предложение.",
             reply_markup=deal_keyboard(deal_id, "accept", "cancel"),
         )
-    except (ValueError, InvalidOperation) as exc:
-        await message.answer(f"Не удалось создать сделку: {exc}")
     except Exception:
         await message.answer(
-            "Не удалось отправить предложение продавцу. Проверьте, что он запустил бота (/start)."
+            f"Сделка #{deal_id} создана, но уведомление продавцу не доставлено. "
+            "Проверьте, что продавец запустил бота через /start."
         )
 
 
