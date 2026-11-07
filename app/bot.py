@@ -53,17 +53,6 @@ async def participant_ids(session, deal: Deal) -> tuple[int, int]:
     return buyer.telegram_id, seller.telegram_id
 
 
-async def notify_participants(bot: Bot, deal: Deal, text: str, reply_markup=None) -> None:
-    async with SessionFactory() as session:
-        buyer_id, seller_id = await participant_ids(session, deal)
-    for telegram_id in {buyer_id, seller_id}:
-        try:
-            await bot.send_message(telegram_id, text, reply_markup=reply_markup)
-        except Exception:
-            # A participant may have blocked the bot; deal state remains safely committed.
-            pass
-
-
 @dp.message(Command("start"))
 async def start(message: Message) -> None:
     async with SessionFactory() as session, session.begin():
@@ -240,10 +229,11 @@ async def deal_action(callback: CallbackQuery) -> None:
             )
         elif action == "confirm":
             await callback.message.edit_reply_markup(reply_markup=None)
-            await notify_participants(
-                callback.bot, await _load_deal(deal_id),
-                f"✅ Сделка #{deal_id} завершена. Средства зачислены продавцу."
-            )
+            for telegram_id in {buyer_id, seller_id}:
+                await callback.bot.send_message(
+                    telegram_id,
+                    f"✅ Сделка #{deal_id} завершена. Средства зачислены продавцу."
+                )
         elif action in ("dispute", "cancel"):
             await callback.message.edit_reply_markup(reply_markup=None)
             status_text = "отправлена на разбор администратору" if action == "dispute" else "отменена"
@@ -263,14 +253,6 @@ async def deal_action(callback: CallbackQuery) -> None:
         await callback.answer(str(exc), show_alert=True)
     except Exception:
         await callback.answer("Не удалось выполнить действие. Попробуйте позже.", show_alert=True)
-
-
-async def _load_deal(deal_id: int) -> Deal:
-    async with SessionFactory() as session:
-        deal = await session.get(Deal, deal_id)
-        if deal is None:
-            raise ValueError("Сделка не найдена.")
-        return deal
 
 
 async def _admin_resolve(message: Message, *, release: bool) -> None:
