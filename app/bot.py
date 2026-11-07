@@ -1474,6 +1474,197 @@ async def _admin_user_card(message: Message, telegram_id: int) -> None:
         await message.answer(text, reply_markup=admin_user_keyboard(user), parse_mode="HTML")
 
 
+
+@dp.callback_query(F.data == "adminpanel:subscription")
+async def admin_subscription_settings(callback: CallbackQuery) -> None:
+    if callback.from_user.id != settings.superadmin_id:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    enabled = await app_setting("subscription_enabled", "0")
+    channel = await app_setting("subscription_channel", "")
+    status = "🟢 Включена" if enabled == "1" and channel else "⚪️ Выключена"
+    await callback.answer()
+    await callback.message.answer(
+        "🔐 <b>Обязательная подписка</b>\n━━━━━━━━━━━━━━━━━━\n"
+        f"Статус: <b>{status}</b>\nКанал: <code>{html.escape(channel or 'не задан')}</code>\n\n"
+        "Укажи публичный канал в формате @channel. Бот должен быть администратором канала, "
+        "чтобы Telegram разрешил проверять подписки.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [ui_button(text="✏️ Указать / изменить канал", callback_data="adminsubscription:set")],
+            [ui_button(text="🟢 Включить" if enabled != "1" else "⚪️ Выключить", callback_data="adminsubscription:toggle", style="success" if enabled != "1" else "danger")],
+            [ui_button(text="⬅️ Админ-панель", callback_data="adminpanel:home")],
+        ]),
+    )
+
+
+@dp.callback_query(F.data == "adminsubscription:set")
+async def admin_subscription_set_start(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user.id != settings.superadmin_id:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    await state.set_state(AdminUserStates.subscription_channel)
+    await callback.answer()
+    await callback.message.answer(
+        "📢 Отправь username публичного канала, например <code>@my_news</code>. "
+        "Предварительно добавь бота в администраторы канала.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[ui_button(text="✖️ Отмена", callback_data="adminsubscription:cancel")]]),
+    )
+
+
+@dp.message(AdminUserStates.subscription_channel)
+async def admin_subscription_save_channel(message: Message, state: FSMContext) -> None:
+    if message.from_user.id != settings.superadmin_id:
+        await state.clear()
+        return
+    channel = (message.text or "").strip()
+    if not re.fullmatch(r"@[A-Za-z0-9_]{5,32}", channel):
+        await message.answer("❌ Укажи публичный канал в формате @my_news.")
+        return
+    try:
+        chat = await message.bot.get_chat(channel)
+        bot_member = await message.bot.get_chat_member(chat_id=chat.id, user_id=message.bot.id)
+        if bot_member.status not in ("administrator", "creator"):
+            await message.answer("❌ Сначала назначь бота администратором канала.")
+            return
+    except TelegramAPIError:
+        logging.getLogger(__name__).exception("Cannot validate subscription channel=%s", channel)
+        await message.answer("❌ Не удалось проверить канал. Проверь username и права бота.")
+        return
+    await save_app_setting("subscription_channel", channel)
+    await state.clear()
+    await message.answer(
+        f"✅ Канал сохранён: <b>{html.escape(channel)}</b>", parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[ui_button(text="🔐 Настройки подписки", callback_data="adminpanel:subscription")]]),
+    )
+
+
+@dp.callback_query(F.data == "adminsubscription:toggle")
+async def admin_subscription_toggle(callback: CallbackQuery) -> None:
+    if callback.from_user.id != settings.superadmin_id:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    channel = await app_setting("subscription_channel", "")
+    if not channel:
+        await callback.answer("Сначала укажи канал.", show_alert=True)
+        return
+    current = await app_setting("subscription_enabled", "0")
+    new_value = "0" if current == "1" else "1"
+    await save_app_setting("subscription_enabled", new_value)
+    await callback.answer("Проверка включена." if new_value == "1" else "Проверка выключена.")
+    status = "🟢 Включена" if new_value == "1" else "⚪️ Выключена"
+    await callback.message.edit_text(
+        f"🔐 <b>Обязательная подписка</b>\nСтатус: <b>{status}</b>\nКанал: <code>{html.escape(channel)}</code>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [ui_button(text="✏️ Изменить канал", callback_data="adminsubscription:set")],
+            [ui_button(text="⚪️ Выключить" if new_value == "1" else "🟢 Включить", callback_data="adminsubscription:toggle", style="danger" if new_value == "1" else "success")],
+            [ui_button(text="⬅️ Админ-панель", callback_data="adminpanel:home")],
+        ]),
+    )
+
+
+@dp.callback_query(F.data == "adminsubscription:cancel")
+async def admin_subscription_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.answer("Отменено.")
+    await callback.message.answer("Настройка отменена.", reply_markup=admin_main_keyboard())
+
+
+@dp.callback_query(F.data == "adminpanel:broadcast")
+async def admin_broadcast_start(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user.id != settings.superadmin_id:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    await state.set_state(AdminUserStates.broadcast_text)
+    await callback.answer()
+    await callback.message.answer(
+        "📣 <b>Рассылка пользователям</b>\n━━━━━━━━━━━━━━━━━━\n\n"
+        "Отправь текст сообщения (до 4000 символов). Поддерживается HTML. "
+        "Перед отправкой появится предпросмотр и подтверждение.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[ui_button(text="✖️ Отмена", callback_data="adminbroadcast:cancel")]]),
+    )
+
+
+@dp.message(AdminUserStates.broadcast_text)
+async def admin_broadcast_preview(message: Message, state: FSMContext) -> None:
+    if message.from_user.id != settings.superadmin_id:
+        await state.clear()
+        return
+    body = (message.text or "").strip()
+    if not body or len(body) > 4000:
+        await message.answer("Сообщение должно содержать от 1 до 4000 символов.")
+        return
+    async with SessionFactory() as session:
+        total = await session.scalar(select(func.count(User.id)).where(User.is_blocked.is_(False))) or 0
+    await state.update_data(broadcast_text=body, broadcast_total=total)
+    await state.set_state(AdminUserStates.broadcast_confirm)
+    await message.answer(
+        "👀 <b>Предпросмотр рассылки</b>\n━━━━━━━━━━━━━━━━━━\n\n" + body +
+        f"\n\n👥 Получателей: <b>{total}</b>\nОтправить всем незаблокированным пользователям?",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [ui_button(text="🚀 Подтвердить рассылку", callback_data="adminbroadcast:send", style="success")],
+            [ui_button(text="✏️ Изменить текст", callback_data="adminbroadcast:edit")],
+            [ui_button(text="✖️ Отмена", callback_data="adminbroadcast:cancel", style="danger")],
+        ]),
+    )
+
+
+@dp.callback_query(F.data == "adminbroadcast:edit")
+async def admin_broadcast_edit(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user.id != settings.superadmin_id:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    await state.set_state(AdminUserStates.broadcast_text)
+    await callback.answer()
+    await callback.message.answer("✏️ Отправь новый текст рассылки.")
+
+
+@dp.callback_query(F.data == "adminbroadcast:send")
+async def admin_broadcast_send(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user.id != settings.superadmin_id:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    data = await state.get_data()
+    body = data.get("broadcast_text")
+    if not body:
+        await state.clear()
+        await callback.answer("Текст не найден. Начни заново.", show_alert=True)
+        return
+    await callback.answer("Рассылка запущена.")
+    await callback.message.answer("⏳ Рассылка запущена. Это может занять время.")
+    async with SessionFactory() as session:
+        recipients = list((await session.scalars(select(User.telegram_id).where(User.is_blocked.is_(False)).order_by(User.id))).all())
+    sent = failed = 0
+    for telegram_id in recipients:
+        try:
+            await callback.bot.send_message(telegram_id, body, parse_mode="HTML")
+            sent += 1
+        except TelegramAPIError as exc:
+            failed += 1
+            logging.getLogger(__name__).warning("Broadcast failed user_id=%s error=%s", telegram_id, exc)
+        await asyncio.sleep(0.05)
+    await state.clear()
+    logging.getLogger(__name__).info("Broadcast finished admin_id=%s total=%s sent=%s failed=%s", callback.from_user.id, len(recipients), sent, failed)
+    await callback.message.answer(
+        "📊 <b>Рассылка завершена</b>\n━━━━━━━━━━━━━━━━━━\n"
+        f"👥 Всего: <b>{len(recipients)}</b>\n✅ Доставлено: <b>{sent}</b>\n⚠️ Ошибок: <b>{failed}</b>",
+        parse_mode="HTML", reply_markup=admin_main_keyboard(),
+    )
+
+
+@dp.callback_query(F.data == "adminbroadcast:cancel")
+async def admin_broadcast_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user.id != settings.superadmin_id:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    await state.clear()
+    await callback.answer("Рассылка отменена.")
+    await callback.message.answer("Рассылка отменена.", reply_markup=admin_main_keyboard())
+
 @dp.callback_query(F.data == "adminpanel:home")
 async def admin_panel_home(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.from_user.id != settings.superadmin_id:
