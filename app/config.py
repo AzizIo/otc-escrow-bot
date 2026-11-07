@@ -6,7 +6,6 @@ class Settings(BaseSettings):
     database_url: str
     superadmin_id: int = 7620642308
     currency: str = "USDT"
-    crypto_pay_api_token: str | None = None
     crypto_pay_api_base: str = "https://pay.crypt.bot/api"
     log_level: str = "INFO"
 
