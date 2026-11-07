@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Numeric, String, Text, func
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, Numeric, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -48,6 +48,10 @@ class User(Base):
 
 class Account(Base):
     __tablename__ = "accounts"
+    __table_args__ = (
+        CheckConstraint("available >= 0", name="ck_accounts_available_nonnegative"),
+        CheckConstraint("frozen >= 0", name="ck_accounts_frozen_nonnegative"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
@@ -58,6 +62,7 @@ class Account(Base):
 
 class Deal(Base):
     __tablename__ = "deals"
+    __table_args__ = (CheckConstraint("amount > 0", name="ck_deals_amount_positive"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     buyer_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
@@ -71,6 +76,7 @@ class Deal(Base):
 
 class LedgerEntry(Base):
     __tablename__ = "ledger_entries"
+    __table_args__ = (CheckConstraint("amount > 0", name="ck_ledger_amount_positive"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), index=True)
