@@ -12,21 +12,38 @@ Telegram OTC deal coordinator with an internal accounting ledger.
 - SQLAlchemy 2 async + Alembic
 - Docker Compose
 
-## Implemented so far
+## Implemented
 
-- User registration via `/start` and balance view via `/balance`.
+- User registration with `/start` and internal balance view with `/balance`.
+- Create a deal: `/deal SELLER_TELEGRAM_ID AMOUNT DESCRIPTION`.
+- Seller accepts or cancels the offer with Telegram buttons.
+- Buyer reserves the agreed amount; the amount moves from available to frozen balance.
+- Seller marks the order as delivered; buyer confirms receipt and the amount is credited to the seller.
+- Buyer or seller can open a dispute after funds are reserved.
+- Super Admin resolves a dispute using inline buttons or `/resolve_release ID` / `/resolve_refund ID`.
 - Super Admin-only `/credit ID AMOUNT REASON` and `/debit ID AMOUNT REASON`.
-- Every admin balance adjustment writes an append-only ledger entry.
-- Initial PostgreSQL schema migration.
-- Docker Compose setup.
+- Balance changes are written to an append-only ledger.
+- Deal state transitions lock the deal row and verify the acting participant before changing balances.
+
+## Deal flow
+
+1. Both participants must start the bot with `/start`.
+2. Buyer creates a deal using `/deal SELLER_TELEGRAM_ID AMOUNT DESCRIPTION`.
+3. Seller accepts the offer.
+4. Buyer reserves the amount from their available internal balance.
+5. Seller marks the service/item as delivered.
+6. Buyer confirms receipt; the reserved amount is credited to the seller.
+7. If there is a problem after funding, either participant can open a dispute. The Super Admin chooses payout or refund.
+
+Deals cannot be cancelled after funds have been reserved. A dispute is required instead.
 
 ## Core rules
 
 - Internal USDT is a unit of account only; no blockchain, wallets, crypto APIs, deposits, or withdrawals.
 - All balance changes must be recorded in the ledger.
-- Deal funding, release, refunds, and admin adjustments must run in database transactions.
-- Deal operations must be idempotent and protected against concurrent double-spending.
-- Disputes freeze the deal until an administrator resolves them.
+- Funding, payout, refund, and admin adjustments run in database transactions.
+- Deal transitions use row-level locking and strict state checks to prevent duplicate actions and double spending.
+- Disputes remain unresolved until the Super Admin decides.
 - One Super Admin is configured through `SUPERADMIN_ID` (numeric Telegram ID).
 
 ## Setup
@@ -48,9 +65,11 @@ The container applies Alembic migrations before starting the bot.
 - `/admin` — show admin commands.
 - `/credit TELEGRAM_ID AMOUNT REASON` — add internal balance.
 - `/debit TELEGRAM_ID AMOUNT REASON` — subtract available internal balance.
+- `/resolve_release DEAL_ID` — release reserved funds to the seller.
+- `/resolve_refund DEAL_ID` — return reserved funds to the buyer.
 
 Never send your bot token or server credentials in chat. Keep secrets in the server-side `.env` file.
 
-## Status
+## Current limitations
 
-This is an early scaffold, not production-ready escrow software. Deal creation and state transitions, dispute handling, audit protections, comprehensive tests, and deployment hardening are still pending. Do not use it to custody or represent real customer funds.
+This is an MVP implementation, **not production-ready escrow software**. It has not yet been run against a live Telegram bot or a PostgreSQL deployment in this development session. Automated integration tests, deployment hardening, rate limiting, richer transaction history, and operational monitoring remain to be completed. Do not use it to custody or represent real customer funds.
