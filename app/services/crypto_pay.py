@@ -48,7 +48,7 @@ async def validate_crypto_pay_token(token: str) -> None:
     async with aiohttp.ClientSession(timeout=timeout) as http:
         result = await _api_request(http, token, "getMe")
     if not isinstance(result, dict):
-        raise RuntimeError("Crypto Pay returned an invalid account response")
+        raise TypeError("Crypto Pay returned an invalid account response")
 
 
 async def save_crypto_pay_token(token: str) -> None:
