@@ -1537,8 +1537,8 @@ async def admin_user_action(callback: CallbackQuery, state: FSMContext) -> None:
         await state.set_state(AdminUserStates.balance_amount)
         await callback.answer()
         await callback.message.answer(
-            f"💰 <b>{'Начисление' if action == 'credit' else 'Списание'} баланса</b>\\n\\n"
-            f"Пользователь: <code>{telegram_id}</code>\\n"
+            f"💰 <b>{'Начисление' if action == 'credit' else 'Списание'} баланса</b>\n\n"
+            f"Пользователь: <code>{telegram_id}</code>\n"
             "Выбери сумму или введи свою.",
             parse_mode="HTML",
             reply_markup=admin_balance_amount_keyboard(telegram_id, action),
