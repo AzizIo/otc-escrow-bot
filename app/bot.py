@@ -132,6 +132,12 @@ async def start(message: Message) -> None:
     )
 
 
+@dp.message(Command("menu"))
+async def show_menu(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer("Главное меню:", reply_markup=main_menu())
+
+
 @dp.message(Command("balance"))
 async def balance(message: Message) -> None:
     async with SessionFactory() as session:
