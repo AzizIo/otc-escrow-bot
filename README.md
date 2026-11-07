@@ -73,3 +73,14 @@ Never send your bot token or server credentials in chat. Keep secrets in the ser
 ## Current limitations
 
 This is an MVP implementation, **not production-ready escrow software**. It has not yet been run against a live Telegram bot or a PostgreSQL deployment in this development session. Automated integration tests, deployment hardening, rate limiting, richer transaction history, and operational monitoring remain to be completed. Do not use it to custody or represent real customer funds.
+
+
+## Пополнение через Crypto Bot
+
+1. В @CryptoBot открой Crypto Pay → My Apps → Create App и скопируй API Token.
+2. Добавь токен на сервере в .env как CRYPTO_PAY_API_TOKEN=... Не публикуй его в GitHub и не отправляй в чат.
+3. Перезапусти контейнеры командой docker compose up -d --build.
+
+Пользователь выбирает «Пополнить баланс», вводит сумму в USDT и оплачивает созданный Crypto Pay invoice. Приложение опрашивает getInvoices, проверяет оплаченный счёт и зачисляет его один раз в журнал баланса. Для работы не нужен публичный webhook URL; проверка выполняется фоновым опросом API. В тестовом режиме используй @CryptoTestnetBot и базовый URL https://testnet-pay.crypt.bot/api.
+
+Пополнение зачисляется как внутренний учётный баланс приложения. Само приложение не хранит приватные ключи и не выполняет on-chain переводы пользователям.

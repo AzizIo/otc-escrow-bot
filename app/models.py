@@ -30,6 +30,7 @@ class DealStatus(StrEnum):
 class LedgerKind(StrEnum):
     ADMIN_CREDIT = "admin_credit"
     ADMIN_DEBIT = "admin_debit"
+    DEPOSIT_CREDIT = "deposit_credit"
     DEAL_FREEZE = "deal_freeze"
     DEAL_RELEASE = "deal_release"
     DEAL_REFUND = "deal_refund"
@@ -88,3 +89,18 @@ class LedgerEntry(Base):
     reason: Mapped[str] = mapped_column(Text)
     deal_id: Mapped[int | None] = mapped_column(ForeignKey("deals.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CryptoDeposit(Base):
+    __tablename__ = "crypto_deposits"
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="ck_crypto_deposits_amount_positive"),
+    )
+
+    invoice_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    status: Mapped[str] = mapped_column(String(24), default="active", index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

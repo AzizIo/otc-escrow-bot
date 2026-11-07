@@ -1,5 +1,7 @@
 from decimal import Decimal, InvalidOperation
 
+import aiohttp
+
 from aiogram import F, Bot, Dispatcher
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
@@ -29,8 +31,13 @@ from app.services.deals import (
     open_dispute,
 )
 from app.services.ledger import admin_adjust
+from app.services.crypto_pay import create_deposit_invoice
 
 dp = Dispatcher()
+
+
+class TopUp(StatesGroup):
+    amount = State()
 
 
 class DealCreation(StatesGroup):
@@ -48,6 +55,7 @@ def main_menu() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="💰 Мой баланс", callback_data="menu:balance"),
                 InlineKeyboardButton(text="📋 Мои сделки", callback_data="menu:deals"),
             ],
+            [InlineKeyboardButton(text="➕ Пополнить баланс", callback_data="menu:topup")],
             [InlineKeyboardButton(text="ℹ️ Помощь", callback_data="menu:help")],
         ]
     )
@@ -150,7 +158,10 @@ async def balance(message: Message) -> None:
             return
         await message.answer(
             f"Доступно: {account.available:.2f} {account.currency}\n"
-            f"В резерве: {account.frozen:.2f} {account.currency}"
+            f"В резерве: {account.frozen:.2f} {account.currency}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="➕ Пополнить баланс", callback_data="menu:topup")]
+            ]),
         )
 
 
@@ -274,7 +285,72 @@ async def menu_balance(callback: CallbackQuery, state: FSMContext) -> None:
         f"💰 Твой баланс\n\n"
         f"Доступно: {account.available:.2f} {account.currency}\n"
         f"В резерве: {account.frozen:.2f} {account.currency}",
-        reply_markup=main_menu(),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Пополнить баланс", callback_data="menu:topup")],
+            [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu:help")],
+        ]),
+    )
+
+
+@dp.callback_query(F.data == "menu:topup")
+async def menu_topup(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.clear()
+    if not settings.crypto_pay_api_token:
+        await callback.message.answer(
+            "Пополнение пока не подключено. Администратору нужно добавить "
+            "CRYPTO_PAY_API_TOKEN в .env."
+        )
+        return
+    await state.set_state(TopUp.amount)
+    await callback.message.answer(
+        "➕ Пополнение баланса через Crypto Bot\n\n"
+        "Введи сумму в USDT (от 1 до 100 000). После оплаты она автоматически "
+        "поступит на твой внутренний баланс.\n\nДля отмены отправь /cancel."
+    )
+
+
+@dp.message(TopUp.amount)
+async def receive_topup_amount(message: Message, state: FSMContext) -> None:
+    try:
+        amount = Decimal((message.text or "").strip().replace(",", "."))
+        if (
+            not amount.is_finite()
+            or amount < Decimal("1.00")
+            or amount > Decimal("100000.00")
+            or amount.as_tuple().exponent < -2
+        ):
+            raise ValueError
+    except (InvalidOperation, ValueError):
+        await message.answer("Введи сумму от 1 до 100 000 USDT, максимум 2 знака после запятой.")
+        return
+
+    try:
+        invoice = await create_deposit_invoice(
+            telegram_id=message.from_user.id,
+            amount=amount,
+        )
+    except (aiohttp.ClientError, RuntimeError, SQLAlchemyError) as exc:
+        await message.answer("Не удалось создать счёт Crypto Bot. Попробуй позже.")
+        logging.getLogger(__name__).warning("Crypto Pay invoice creation failed: %s", exc)
+        await state.clear()
+        return
+
+    await state.clear()
+    invoice_url = invoice.get("bot_invoice_url")
+    if not invoice_url:
+        await message.answer("Crypto Bot не вернул ссылку на оплату. Обратись к администратору.")
+        return
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💳 Оплатить через Crypto Bot", url=invoice_url)],
+        [InlineKeyboardButton(text="💰 Проверить баланс", callback_data="menu:balance")],
+    ])
+    await message.answer(
+        f"Счёт на {amount:.2f} USDT создан.\n"
+        "Оплати его по кнопке ниже. После подтверждения Crypto Bot баланс "
+        "зачислится автоматически (обычно в течение нескольких секунд).\n\n"
+        f"Номер счёта: {invoice['invoice_id']}",
+        reply_markup=keyboard,
     )
 
 

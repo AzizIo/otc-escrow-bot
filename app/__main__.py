@@ -7,6 +7,7 @@ from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefaul
 from app.bot import create_bot, dp
 from app.config import settings
 from app.db import engine
+from app.services.crypto_pay import poll_crypto_pay_invoices
 
 
 async def configure_commands(bot: Bot) -> None:
@@ -36,10 +37,16 @@ async def configure_commands(bot: Bot) -> None:
 async def main() -> None:
     logging.basicConfig(level=settings.log_level)
     bot = create_bot()
+    payment_task = asyncio.create_task(poll_crypto_pay_invoices(bot))
     try:
         await configure_commands(bot)
         await dp.start_polling(bot)
     finally:
+        payment_task.cancel()
+        try:
+            await payment_task
+        except asyncio.CancelledError:
+            pass
         await bot.session.close()
         await engine.dispose()
 
