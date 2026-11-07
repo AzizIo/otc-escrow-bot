@@ -12,6 +12,8 @@ from app.db import engine
 async def configure_commands(bot: Bot) -> None:
     user_commands = [
         BotCommand(command="start", description="Регистрация и главное меню"),
+        BotCommand(command="menu", description="Открыть главное меню"),
+        BotCommand(command="cancel", description="Отменить текущее действие"),
         BotCommand(command="balance", description="Мой внутренний баланс"),
         BotCommand(command="deal", description="Создать сделку"),
         BotCommand(command="my_deals", description="Мои последние сделки"),
