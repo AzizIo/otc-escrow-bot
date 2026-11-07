@@ -874,15 +874,20 @@ async def admin_crypto_pay_receive_token(message: Message, state: FSMContext) ->
         return
 
     token = (message.text or "").strip()
+    message_deleted = True
     try:
         await message.delete()
     except TelegramAPIError:
+        message_deleted = False
         logging.getLogger(__name__).warning(
             "Could not delete the administrator's Crypto Pay token message"
         )
 
     if not token or len(token) > 512 or any(char.isspace() for char in token):
-        await message.answer("Токен выглядит некорректно. Отправь его одним сообщением ещё раз.")
+        warning = "" if message_deleted else "\n⚠️ Не удалось удалить сообщение с токеном — удали его вручную."
+        await message.answer(
+            "Токен выглядит некорректно. Отправь его одним сообщением ещё раз." + warning
+        )
         return
 
     try:
@@ -896,9 +901,13 @@ async def admin_crypto_pay_receive_token(message: Message, state: FSMContext) ->
         return
 
     await state.clear()
+    warning = "" if message_deleted else (
+        "\n⚠️ Telegram не позволил удалить исходное сообщение с токеном. "
+        "Удали его вручную из этого чата."
+    )
     await message.answer(
         "✅ Crypto Pay успешно подключён. Токен проверен и сохранён. "
-        "Пополнения снова доступны.",
+        "Пополнения снова доступны." + warning,
         reply_markup=admin_main_keyboard(),
     )
 
