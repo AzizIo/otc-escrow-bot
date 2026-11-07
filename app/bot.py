@@ -8,7 +8,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.config import settings
@@ -92,7 +92,7 @@ async def start(message: Message) -> None:
         "Добро пожаловать в OTC Escrow.\n\n"
         "Баланс — внутренняя учётная запись в условных USDT, не реальные токены "
         "и не криптокошелёк.\n\n"
-        "Команды: /balance, /deal, /help."
+        "Команды: /balance, /deal, /my_deals, /help."
     )
 
 
@@ -110,6 +110,49 @@ async def balance(message: Message) -> None:
             f"Доступно: {account.available:.2f} {account.currency}\n"
             f"В резерве: {account.frozen:.2f} {account.currency}"
         )
+
+
+@dp.message(Command("my_deals"))
+async def my_deals(message: Message) -> None:
+    status_labels = {
+        "awaiting_seller": "Ожидает продавца",
+        "awaiting_funding": "Ожидает резерва",
+        "funded": "Средства в резерве",
+        "delivered": "Ожидает подтверждения",
+        "completed": "Завершена",
+        "cancelled": "Отменена",
+        "disputed": "Спор",
+        "refunded": "Возвращена",
+    }
+    async with SessionFactory() as session:
+        user = await session.scalar(
+            select(User).where(User.telegram_id == message.from_user.id)
+        )
+        if user is None:
+            await message.answer("Сначала отправь /start.")
+            return
+        deals = list(
+            (
+                await session.scalars(
+                    select(Deal)
+                    .where(or_(Deal.buyer_id == user.id, Deal.seller_id == user.id))
+                    .order_by(Deal.created_at.desc())
+                    .limit(10)
+                )
+            ).all()
+        )
+    if not deals:
+        await message.answer("У тебя пока нет сделок.")
+        return
+    lines = ["Последние сделки:"]
+    for deal in deals:
+        role = "Покупатель" if deal.buyer_id == user.id else "Продавец"
+        status = status_labels.get(deal.status, deal.status)
+        lines.append(
+            f"#{deal.id} · {deal.amount:.2f} USDT · {role}\n"
+            f"{status} · {deal.description[:80]}"
+        )
+    await message.answer("\n\n".join(lines))
 
 
 async def _adjust_balance(message: Message, *, credit: bool) -> None:
@@ -372,7 +415,8 @@ async def help_command(message: Message) -> None:
         "3. Покупатель резервирует сумму кнопкой.\n"
         "4. Продавец отмечает выполнение.\n"
         "5. Покупатель подтверждает получение — сумма зачисляется продавцу.\n\n"
-        "При проблеме участник открывает спор кнопкой. Решение принимает администратор.\n\n"
+        "При проблеме участник открывает спор кнопкой. Решение принимает администратор.\n"
+        "/my_deals — последние 10 твоих сделок.\n\n"
         "Важно: USDT здесь — только внутренняя единица учёта, не реальные токены."
     )
 
