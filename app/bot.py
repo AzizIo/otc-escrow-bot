@@ -1,5 +1,6 @@
 from decimal import Decimal, InvalidOperation
 from datetime import date, datetime, time, timezone
+import html
 import logging
 
 import aiohttp
@@ -734,6 +735,9 @@ async def _admin_user_card(message: Message, telegram_id: int) -> None:
             await message.answer("Пользователь не найден.")
             return
         account = await session.scalar(select(Account).where(Account.user_id == user.id))
+        available = account.available if account else Decimal("0.00")
+        frozen = account.frozen if account else Decimal("0.00")
+        currency = account.currency if account else "USDT"
         total = await session.scalar(
             select(func.count(Deal.id)).where(
                 or_(Deal.buyer_id == user.id, Deal.seller_id == user.id)
@@ -759,12 +763,12 @@ async def _admin_user_card(message: Message, telegram_id: int) -> None:
         text = (
             f"👤 Профиль пользователя\n\n"
             f"Telegram ID: <code>{user.telegram_id}</code>\n"
-            f"Имя: {user.full_name or 'не указано'}\n"
-            f"Username: {username}\n"
+            f"Имя: {html.escape(user.full_name or 'не указано')}\n"
+            f"Username: {html.escape(username)}\n"
             f"Статус: {status}\n\n"
             f"💰 Баланс\n"
-            f"Доступно: {account.available:.2f} {account.currency if account else 'USDT'}\n"
-            f"В резерве: {account.frozen:.2f} {account.currency if account else 'USDT'}\n\n"
+            f"Доступно: {available:.2f} {currency}\n"
+            f"В резерве: {frozen:.2f} {currency}\n\n"
             f"📈 Фактическая статистика\n"
             f"Сделок всего: {total}\n"
             f"Успешных: {successful}\n"
