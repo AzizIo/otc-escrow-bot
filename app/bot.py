@@ -34,8 +34,13 @@ from app.services.deals import (
     open_dispute,
 )
 from app.services.ledger import admin_adjust
-from app.services.crypto_pay import (\n    create_deposit_invoice,\n    delete_crypto_pay_token,\n    get_crypto_pay_token,\n    has_crypto_pay_token,\n    save_crypto_pay_token,\n    validate_crypto_pay_token,\n)
-
+from app.services.crypto_pay import (
+    create_deposit_invoice,
+    delete_crypto_pay_token,
+    has_crypto_pay_token,
+    save_crypto_pay_token,
+    validate_crypto_pay_token,
+)
 dp = Dispatcher()
 
 
