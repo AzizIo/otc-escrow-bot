@@ -219,7 +219,6 @@ async def deal_action(callback: CallbackQuery) -> None:
             else:
                 raise ValueError("Неизвестное действие.")
             deal_id = deal.id
-            status = deal.status
             buyer_id, seller_id = await participant_ids(session, deal)
 
         await callback.answer("Готово.")
