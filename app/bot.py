@@ -1,6 +1,7 @@
 from decimal import Decimal, InvalidOperation
 
 from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
@@ -10,6 +11,7 @@ from aiogram.types import (
 )
 from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import settings
 from app.db import SessionFactory
@@ -216,7 +218,7 @@ async def new_deal(message: Message) -> None:
     except (ValueError, InvalidOperation) as exc:
         await message.answer(f"Не удалось создать сделку: {exc}")
         return
-    except Exception:
+    except SQLAlchemyError:
         await message.answer("Ошибка базы данных. Сделка не создана, попробуйте позже.")
         return
 
@@ -231,7 +233,7 @@ async def new_deal(message: Message) -> None:
             f"Описание: {description}\n\nПримите или отклоните предложение.",
             reply_markup=deal_keyboard(deal_id, "accept", "cancel"),
         )
-    except Exception:
+    except TelegramAPIError:
         await message.answer(
             f"Сделка #{deal_id} создана, но уведомление продавцу не доставлено. "
             "Проверьте, что продавец запустил бота через /start."
@@ -320,7 +322,7 @@ async def deal_action(callback: CallbackQuery) -> None:
                 )
     except (ValueError, InvalidOperation) as exc:
         await callback.answer(str(exc), show_alert=True)
-    except Exception:
+    except (SQLAlchemyError, TelegramAPIError):
         await callback.answer("Не удалось выполнить действие. Попробуйте позже.", show_alert=True)
 
 
@@ -377,7 +379,7 @@ async def admin_deal_action(callback: CallbackQuery) -> None:
             )
     except (ValueError, InvalidOperation) as exc:
         await callback.answer(str(exc), show_alert=True)
-    except Exception:
+    except (SQLAlchemyError, TelegramAPIError):
         await callback.answer("Не удалось применить решение.", show_alert=True)
 
 
