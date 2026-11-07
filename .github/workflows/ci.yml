@@ -9,6 +9,24 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      BOT_TOKEN: "123456789:ci-test-token"
+      DATABASE_URL: "postgresql+asyncpg://escrow:ci-password@localhost:5432/escrow"
+      SUPERADMIN_ID: "7620642308"
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: escrow
+          POSTGRES_PASSWORD: ci-password
+          POSTGRES_DB: escrow
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U escrow -d escrow"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -21,3 +39,7 @@ jobs:
         run: ruff check .
       - name: Tests
         run: pytest
+      - name: Verify database migrations
+        run: alembic upgrade head
+      - name: Build Docker image
+        run: docker build -t otc-escrow-bot:ci .
