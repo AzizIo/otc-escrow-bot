@@ -353,6 +353,105 @@ async def show_admin_users_page(message: Message, page: int = 0) -> None:
     )
 
 
+
+async def app_setting(key: str, default: str = "") -> str:
+    async with SessionFactory() as session:
+        setting = await session.get(AppSetting, key)
+        return setting.value if setting else default
+
+
+async def save_app_setting(key: str, value: str) -> None:
+    async with SessionFactory() as session, session.begin():
+        setting = await session.get(AppSetting, key)
+        if setting is None:
+            session.add(AppSetting(key=key, value=value))
+        else:
+            setting.value = value
+
+
+def subscription_keyboard(channel: str) -> InlineKeyboardMarkup:
+    username = channel.removeprefix("@")
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [ui_button(text="📢 Перейти в информационный канал", url=f"https://t.me/{username}")],
+        [ui_button(text="🔄 Я подписался — проверить", callback_data="subscription:check", style="success")],
+    ])
+
+
+async def subscription_prompt(event: Message | CallbackQuery, channel: str) -> None:
+    message = event if isinstance(event, Message) else event.message
+    if message:
+        await message.answer(
+            "🔐 <b>Доступ временно ограничен</b>\n━━━━━━━━━━━━━━━━━━\n\n"
+            "Чтобы пользоваться OTC ESCROW, подпишись на информационный канал.\n\n"
+            "1️⃣ Перейди в канал и подпишись.\n2️⃣ Вернись сюда и нажми «Я подписался — проверить».\n\n"
+            "💡 После проверки все функции станут доступны.",
+            parse_mode="HTML", reply_markup=subscription_keyboard(channel),
+        )
+
+
+class SubscriptionMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        user = getattr(event, "from_user", None)
+        if user is None or user.id == settings.superadmin_id:
+            return await handler(event, data)
+        enabled = await app_setting("subscription_enabled", "0")
+        channel = await app_setting("subscription_channel", "")
+        if enabled != "1" or not channel:
+            return await handler(event, data)
+        if isinstance(event, CallbackQuery) and event.data == "subscription:check":
+            return await handler(event, data)
+        try:
+            member = await event.bot.get_chat_member(chat_id=channel, user_id=user.id)
+            is_member = member.status in ("creator", "administrator", "member") or (
+                member.status == "restricted" and getattr(member, "is_member", False)
+            )
+            if is_member:
+                return await handler(event, data)
+        except TelegramAPIError:
+            logging.getLogger(__name__).exception(
+                "Subscription check failed user_id=%s channel=%s", user.id, channel
+            )
+            if isinstance(event, CallbackQuery):
+                await event.answer("Не удалось проверить подписку. Попробуй позже.", show_alert=True)
+            else:
+                await event.answer("⚠️ Не удалось проверить подписку. Попробуй позже.")
+            return None
+        if isinstance(event, CallbackQuery):
+            await event.answer("Сначала подпишись на информационный канал.")
+        await subscription_prompt(event, channel)
+        return None
+
+
+dp.message.outer_middleware(SubscriptionMiddleware())
+dp.callback_query.outer_middleware(SubscriptionMiddleware())
+
+
+@dp.callback_query(F.data == "subscription:check")
+async def subscription_check(callback: CallbackQuery) -> None:
+    channel = await app_setting("subscription_channel", "")
+    enabled = await app_setting("subscription_enabled", "0")
+    if enabled != "1" or not channel:
+        await callback.answer("Проверка подписки не требуется.")
+        await callback.message.answer("✅ Доступ открыт.", reply_markup=main_menu(callback.from_user.id))
+        return
+    try:
+        member = await callback.bot.get_chat_member(chat_id=channel, user_id=callback.from_user.id)
+    except TelegramAPIError:
+        logging.getLogger(__name__).exception("Manual subscription check failed user_id=%s", callback.from_user.id)
+        await callback.answer("Не удалось проверить подписку. Попробуй позже.", show_alert=True)
+        return
+    ok = member.status in ("creator", "administrator", "member") or (
+        member.status == "restricted" and getattr(member, "is_member", False)
+    )
+    if not ok:
+        await callback.answer("Подписка пока не найдена. Подпишись и попробуй снова.", show_alert=True)
+        return
+    await callback.answer("Подписка подтверждена! 🎉")
+    await callback.message.answer(
+        "🎉 <b>Подписка подтверждена!</b> Теперь все функции доступны.",
+        parse_mode="HTML", reply_markup=main_menu(callback.from_user.id),
+    )
+
 @dp.message(Command("start"))
 async def start(message: Message) -> None:
     async with SessionFactory() as session, session.begin():
