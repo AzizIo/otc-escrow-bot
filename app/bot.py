@@ -720,6 +720,7 @@ def admin_user_keyboard(user: User) -> InlineKeyboardMarkup:
          InlineKeyboardButton(text="➖ Списать баланс", callback_data=f"adminuser:debit:{user.telegram_id}")],
         [InlineKeyboardButton(text=status_label, callback_data=f"adminuser:{status_action}:{user.telegram_id}")],
         [InlineKeyboardButton(text="📋 Последние сделки", callback_data=f"adminuser:deals:{user.telegram_id}")],
+        [InlineKeyboardButton(text="🧾 История изменений", callback_data=f"adminuser:audit:{user.telegram_id}")],
         [InlineKeyboardButton(text="⬅️ Админ-панель", callback_data="adminpanel:home")],
     ])
 
@@ -879,6 +880,30 @@ async def admin_user_action(callback: CallbackQuery, state: FSMContext) -> None:
             ))
         await callback.answer("Статус обновлён.")
         await _admin_user_card(callback.message, telegram_id)
+        return
+
+    if action == "audit":
+        async with SessionFactory() as session:
+            user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
+            if user is None:
+                await callback.answer("Пользователь не найден.", show_alert=True)
+                return
+            rows = list((await session.scalars(
+                select(UserAdminAudit).where(UserAdminAudit.user_id == user.id)
+                .order_by(UserAdminAudit.created_at.desc()).limit(20)
+            )).all())
+        await callback.answer()
+        if not rows:
+            await callback.message.answer("История административных изменений пока пуста.")
+        else:
+            lines = ["🧾 Последние изменения (до 20):"]
+            for row in rows:
+                lines.append(
+                    f"{row.created_at:%d.%m.%Y %H:%M} · {row.field}\n"
+                    f"{row.old_value or '—'} → {row.new_value or '—'}\n"
+                    f"Причина: {row.reason}"
+                )
+            await callback.message.answer("\n\n".join(lines))
         return
 
     if action == "deals":
