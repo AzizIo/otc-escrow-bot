@@ -45,6 +45,15 @@ def deal_keyboard(deal_id: int, *actions: str) -> InlineKeyboardMarkup:
     )
 
 
+def admin_deal_keyboard(deal_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💸 Выплатить продавцу", callback_data=f"admin:release:{deal_id}")],
+            [InlineKeyboardButton(text="↩️ Вернуть покупателю", callback_data=f"admin:refund:{deal_id}")],
+        ]
+    )
+
+
 async def participant_ids(session, deal: Deal) -> tuple[int, int]:
     buyer = await session.get(User, deal.buyer_id)
     seller = await session.get(User, deal.seller_id)
@@ -159,7 +168,7 @@ async def new_deal(message: Message) -> None:
             seller_id,
             f"Вам предложена сделка #{deal_id}.\nСумма: {deal_amount:.2f} USDT\n"
             f"Описание: {description}\n\nПримите или отклоните предложение.",
-            reply_markup=deal_keyboard(deal_id, "accept", "cancel", "dispute"),
+            reply_markup=deal_keyboard(deal_id, "accept", "cancel"),
         )
     except (ValueError, InvalidOperation) as exc:
         await message.answer(f"Не удалось создать сделку: {exc}")
@@ -210,7 +219,7 @@ async def deal_action(callback: CallbackQuery) -> None:
             await callback.message.edit_reply_markup(reply_markup=None)
             await callback.bot.send_message(
                 buyer_id, f"Продавец принял сделку #{deal_id}. Теперь зарезервируйте сумму.",
-                reply_markup=deal_keyboard(deal_id, "fund", "dispute", "cancel"),
+                reply_markup=deal_keyboard(deal_id, "fund", "cancel"),
             )
         elif action == "fund":
             await callback.message.edit_reply_markup(reply_markup=None)
@@ -247,7 +256,8 @@ async def deal_action(callback: CallbackQuery) -> None:
                 await callback.bot.send_message(
                     settings.superadmin_id,
                     f"⚠️ Спор по сделке #{deal_id}.\n"
-                    "Решение: /resolve_release ID или /resolve_refund ID"
+                    "Выберите решение:",
+                    reply_markup=admin_deal_keyboard(deal_id),
                 )
     except (ValueError, InvalidOperation) as exc:
         await callback.answer(str(exc), show_alert=True)
@@ -277,6 +287,39 @@ async def _admin_resolve(message: Message, *, release: bool) -> None:
             await message.bot.send_message(telegram_id, f"Решение администратора по сделке #{deal_id}: сумма {result}.")
     except ValueError as exc:
         await message.answer(f"Не удалось разрешить сделку: {exc}")
+
+
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("admin:"))
+async def admin_deal_action(callback: CallbackQuery) -> None:
+    if callback.from_user.id != settings.superadmin_id:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    try:
+        _, action, raw_id = callback.data.split(":")
+        if action not in ("release", "refund"):
+            raise ValueError("Неизвестное действие.")
+        deal_id = int(raw_id)
+        async with SessionFactory() as session, session.begin():
+            deal = await admin_resolve(
+                session,
+                deal_id=deal_id,
+                actor_telegram_id=callback.from_user.id,
+                release_to_seller=(action == "release"),
+            )
+            buyer_id, seller_id = await participant_ids(session, deal)
+        result = "выплачена продавцу" if action == "release" else "возвращена покупателю"
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.answer("Решение применено.")
+        for telegram_id in {buyer_id, seller_id}:
+            await callback.bot.send_message(
+                telegram_id,
+                f"Решение администратора по сделке #{deal_id}: сумма {result}.",
+            )
+    except (ValueError, InvalidOperation) as exc:
+        await callback.answer(str(exc), show_alert=True)
+    except Exception:
+        await callback.answer("Не удалось применить решение.", show_alert=True)
 
 
 @dp.message(Command("resolve_release"))
