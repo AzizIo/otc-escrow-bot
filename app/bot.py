@@ -1,4 +1,5 @@
 from decimal import Decimal, InvalidOperation
+from datetime import date, datetime, time, timezone
 import logging
 
 import aiohttp
@@ -14,13 +15,13 @@ from aiogram.types import (
 )
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import settings
 from app.db import SessionFactory
-from app.models import Account, Deal, User
+from app.models import Account, Deal, User, UserAdminAudit
 from app.services.deals import (
     accept_deal,
     admin_resolve,
@@ -39,6 +40,16 @@ dp = Dispatcher()
 
 class TopUp(StatesGroup):
     amount = State()
+
+
+class AdminUserStates(StatesGroup):
+    search = State()
+    balance_amount = State()
+    balance_reason = State()
+    total_deals = State()
+    successful_deals = State()
+    since_date = State()
+    stats_reason = State()
 
 
 class DealCreation(StatesGroup):
@@ -692,18 +703,384 @@ async def resolve_refund(message: Message) -> None:
     await _admin_resolve(message, release=False)
 
 
+def admin_main_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔎 Найти пользователя", callback_data="adminpanel:find")],
+        [InlineKeyboardButton(text="📊 Общая статистика", callback_data="adminpanel:stats")],
+    ])
+
+
+def admin_user_keyboard(user: User) -> InlineKeyboardMarkup:
+    status_action = "unblock" if user.is_blocked else "block"
+    status_label = "🔓 Разблокировать" if user.is_blocked else "🚫 Заблокировать"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Изменить показатели профиля", callback_data=f"adminuser:edit:{user.telegram_id}")],
+        [InlineKeyboardButton(text="➕ Начислить баланс", callback_data=f"adminuser:credit:{user.telegram_id}"),
+         InlineKeyboardButton(text="➖ Списать баланс", callback_data=f"adminuser:debit:{user.telegram_id}")],
+        [InlineKeyboardButton(text=status_label, callback_data=f"adminuser:{status_action}:{user.telegram_id}")],
+        [InlineKeyboardButton(text="📋 Последние сделки", callback_data=f"adminuser:deals:{user.telegram_id}")],
+        [InlineKeyboardButton(text="⬅️ Админ-панель", callback_data="adminpanel:home")],
+    ])
+
+
+def _date_label(value: datetime | None) -> str:
+    return value.strftime("%d.%m.%Y") if value else "—"
+
+
+async def _admin_user_card(message: Message, telegram_id: int) -> None:
+    async with SessionFactory() as session:
+        user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
+        if user is None:
+            await message.answer("Пользователь не найден.")
+            return
+        account = await session.scalar(select(Account).where(Account.user_id == user.id))
+        total = await session.scalar(
+            select(func.count(Deal.id)).where(
+                or_(Deal.buyer_id == user.id, Deal.seller_id == user.id)
+            )
+        ) or 0
+        successful = await session.scalar(
+            select(func.count(Deal.id)).where(
+                or_(Deal.buyer_id == user.id, Deal.seller_id == user.id),
+                Deal.status == "completed",
+            )
+        ) or 0
+        completed_volume = await session.scalar(
+            select(func.coalesce(func.sum(Deal.amount), 0)).where(
+                or_(Deal.buyer_id == user.id, Deal.seller_id == user.id),
+                Deal.status == "completed",
+            )
+        )
+        display_total = user.profile_deals_override if user.profile_deals_override is not None else total
+        display_success = user.profile_successful_override if user.profile_successful_override is not None else successful
+        display_since = user.profile_since_override or user.created_at
+        username = f"@{user.username}" if user.username else "не указан"
+        status = "🚫 Заблокирован" if user.is_blocked else "✅ Активен"
+        text = (
+            f"👤 Профиль пользователя\n\n"
+            f"Telegram ID: <code>{user.telegram_id}</code>\n"
+            f"Имя: {user.full_name or 'не указано'}\n"
+            f"Username: {username}\n"
+            f"Статус: {status}\n\n"
+            f"💰 Баланс\n"
+            f"Доступно: {account.available:.2f} {account.currency if account else 'USDT'}\n"
+            f"В резерве: {account.frozen:.2f} {account.currency if account else 'USDT'}\n\n"
+            f"📈 Фактическая статистика\n"
+            f"Сделок всего: {total}\n"
+            f"Успешных: {successful}\n"
+            f"Объём завершённых: {Decimal(str(completed_volume or 0)):.2f} USDT\n"
+            f"Регистрация: {_date_label(user.created_at)}\n\n"
+            f"🪪 Показатели профиля\n"
+            f"Сделок: {display_total}{' ✏️' if user.profile_deals_override is not None else ''}\n"
+            f"Успешных: {display_success}{' ✏️' if user.profile_successful_override is not None else ''}\n"
+            f'На платформе с: {_date_label(display_since)}'
+            f"{' ✏️ (ручная дата)' if user.profile_since_override else ''}\n\n"
+            f"✏️ = значение вручную скорректировано администратором."
+        )
+        await message.answer(text, reply_markup=admin_user_keyboard(user), parse_mode="HTML")
+
+
+@dp.callback_query(F.data == "adminpanel:home")
+async def admin_panel_home(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user.id != settings.superadmin_id:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    await state.clear()
+    await callback.answer()
+    await callback.message.answer(
+        "🛠 Панель администратора\nВыбери действие:",
+        reply_markup=admin_main_keyboard(),
+    )
+
+
+@dp.callback_query(F.data == "adminpanel:find")
+async def admin_panel_find(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user.id != settings.superadmin_id:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    await state.clear()
+    await state.set_state(AdminUserStates.search)
+    await callback.answer()
+    await callback.message.answer("Отправь Telegram ID или точный @username пользователя.")
+
+
+@dp.message(AdminUserStates.search)
+async def admin_find_user(message: Message, state: FSMContext) -> None:
+    if message.from_user.id != settings.superadmin_id:
+        await state.clear()
+        return
+    query = (message.text or "").strip()
+    async with SessionFactory() as session:
+        if query.isdigit():
+            user = await session.scalar(select(User).where(User.telegram_id == int(query)))
+        else:
+            username = query.removeprefix("@").lower()
+            user = await session.scalar(
+                select(User).where(func.lower(User.username) == username)
+            )
+        user_id = user.telegram_id if user else None
+    await state.clear()
+    if user_id is None:
+        await message.answer("Не нашёл пользователя. Проверь ID или username.", reply_markup=admin_main_keyboard())
+        return
+    await _admin_user_card(message, user_id)
+
+
+@dp.callback_query(F.data == "adminpanel:stats")
+async def admin_panel_stats(callback: CallbackQuery) -> None:
+    if callback.from_user.id != settings.superadmin_id:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    await callback.answer()
+    async with SessionFactory() as session:
+        users = await session.scalar(select(func.count(User.id))) or 0
+        deals = await session.scalar(select(func.count(Deal.id))) or 0
+        completed = await session.scalar(select(func.count(Deal.id)).where(Deal.status == "completed")) or 0
+        disputed = await session.scalar(select(func.count(Deal.id)).where(Deal.status == "disputed")) or 0
+        volume = await session.scalar(select(func.coalesce(func.sum(Deal.amount), 0)).where(Deal.status == "completed"))
+    await callback.message.answer(
+        f"📊 Статистика биржи\n\nПользователей: {users}\n"
+        f"Сделок всего: {deals}\nУспешных: {completed}\nВ спорах: {disputed}\n"
+        f"Объём завершённых сделок: {Decimal(str(volume or 0)):.2f} USDT",
+        reply_markup=admin_main_keyboard(),
+    )
+
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("adminuser:"))
+async def admin_user_action(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user.id != settings.superadmin_id:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    try:
+        _, action, raw_id = callback.data.split(":")
+        telegram_id = int(raw_id)
+    except (ValueError, AttributeError):
+        await callback.answer("Некорректное действие.", show_alert=True)
+        return
+
+    if action in ("block", "unblock"):
+        async with SessionFactory() as session, session.begin():
+            user = await session.scalar(
+                select(User).where(User.telegram_id == telegram_id).with_for_update()
+            )
+            if user is None:
+                await callback.answer("Пользователь не найден.", show_alert=True)
+                return
+            old = str(user.is_blocked)
+            user.is_blocked = action == "block"
+            session.add(UserAdminAudit(
+                user_id=user.id, actor_telegram_id=callback.from_user.id,
+                field="is_blocked", old_value=old, new_value=str(user.is_blocked),
+                reason="Изменение статуса через панель администратора",
+            ))
+        await callback.answer("Статус обновлён.")
+        await _admin_user_card(callback.message, telegram_id)
+        return
+
+    if action == "deals":
+        async with SessionFactory() as session:
+            user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
+            if user is None:
+                await callback.answer("Пользователь не найден.", show_alert=True)
+                return
+            deals = list((await session.scalars(
+                select(Deal).where(or_(Deal.buyer_id == user.id, Deal.seller_id == user.id))
+                .order_by(Deal.created_at.desc()).limit(15)
+            )).all())
+        await callback.answer()
+        if not deals:
+            await callback.message.answer("У пользователя пока нет сделок.")
+        else:
+            lines = ["📋 Последние сделки пользователя:"]
+            for deal in deals:
+                lines.append(f"#{deal.id} · {deal.amount:.2f} USDT · {deal.status}\n{deal.description[:100]}")
+            await callback.message.answer("\n\n".join(lines))
+        return
+
+    if action in ("credit", "debit"):
+        await state.clear()
+        await state.update_data(admin_target_id=telegram_id, admin_balance_action=action)
+        await state.set_state(AdminUserStates.balance_amount)
+        await callback.answer()
+        await callback.message.answer(
+            f"Введи сумму для {'начисления' if action == 'credit' else 'списания'} "
+            f"пользователю {telegram_id}."
+        )
+        return
+
+    if action == "edit":
+        await state.clear()
+        await state.update_data(admin_target_id=telegram_id)
+        await state.set_state(AdminUserStates.total_deals)
+        await callback.answer()
+        await callback.message.answer(
+            "✏️ Корректировка показателей профиля\n\n"
+            "Введи отображаемое количество сделок. Число или '-' чтобы использовать фактическое значение."
+        )
+        return
+
+    await callback.answer("Неизвестное действие.", show_alert=True)
+
+
+@dp.message(AdminUserStates.balance_amount)
+async def admin_balance_amount(message: Message, state: FSMContext) -> None:
+    if message.from_user.id != settings.superadmin_id:
+        await state.clear()
+        return
+    try:
+        amount = Decimal((message.text or "").strip().replace(",", "."))
+        if not amount.is_finite() or amount <= 0 or amount.as_tuple().exponent < -2:
+            raise ValueError
+    except (InvalidOperation, ValueError):
+        await message.answer("Введи положительную сумму, максимум 2 знака после запятой.")
+        return
+    await state.update_data(admin_balance_amount=str(amount))
+    await state.set_state(AdminUserStates.balance_reason)
+    await message.answer("Укажи причину операции. Она попадёт в журнал баланса.")
+
+
+@dp.message(AdminUserStates.balance_reason)
+async def admin_balance_reason(message: Message, state: FSMContext) -> None:
+    if message.from_user.id != settings.superadmin_id:
+        await state.clear()
+        return
+    reason = (message.text or "").strip()
+    if not reason or len(reason) > 500:
+        await message.answer("Причина должна содержать от 1 до 500 символов.")
+        return
+    data = await state.get_data()
+    credit_action = data["admin_balance_action"] == "credit"
+    try:
+        async with SessionFactory() as session, session.begin():
+            await admin_adjust(
+                session, target_telegram_id=int(data["admin_target_id"]),
+                actor_telegram_id=message.from_user.id,
+                amount=Decimal(data["admin_balance_amount"]),
+                credit=credit_action, reason=reason,
+            )
+    except (ValueError, SQLAlchemyError) as exc:
+        await message.answer(f"Не удалось изменить баланс: {exc}")
+        await state.clear()
+        return
+    telegram_id = int(data["admin_target_id"])
+    await state.clear()
+    await message.answer("✅ Баланс изменён и записан в журнал.")
+    await _admin_user_card(message, telegram_id)
+
+
+@dp.message(AdminUserStates.total_deals)
+async def admin_profile_total(message: Message, state: FSMContext) -> None:
+    if message.from_user.id != settings.superadmin_id:
+        await state.clear()
+        return
+    raw = (message.text or "").strip()
+    if raw != "-" and (not raw.isdigit() or int(raw) > 1_000_000_000):
+        await message.answer("Введи целое число от 0 или '-' для фактического значения.")
+        return
+    await state.update_data(profile_total=None if raw == "-" else int(raw))
+    await state.set_state(AdminUserStates.successful_deals)
+    await message.answer("Введи количество успешных сделок или '-' для фактического значения.")
+
+
+@dp.message(AdminUserStates.successful_deals)
+async def admin_profile_successful(message: Message, state: FSMContext) -> None:
+    if message.from_user.id != settings.superadmin_id:
+        await state.clear()
+        return
+    raw = (message.text or "").strip()
+    if raw != "-" and (not raw.isdigit() or int(raw) > 1_000_000_000):
+        await message.answer("Введи целое число от 0 или '-' для фактического значения.")
+        return
+    await state.update_data(profile_successful=None if raw == "-" else int(raw))
+    await state.set_state(AdminUserStates.since_date)
+    await message.answer("Введи дату «на платформе с» в формате ГГГГ-ММ-ДД или '-' для реальной даты регистрации.")
+
+
+@dp.message(AdminUserStates.since_date)
+async def admin_profile_since(message: Message, state: FSMContext) -> None:
+    if message.from_user.id != settings.superadmin_id:
+        await state.clear()
+        return
+    raw = (message.text or "").strip()
+    try:
+        since = None if raw == "-" else datetime.combine(
+            date.fromisoformat(raw), time.min, tzinfo=timezone.utc
+        )
+        if since and since.date() > datetime.now(timezone.utc).date():
+            raise ValueError
+    except ValueError:
+        await message.answer("Введи корректную дату не из будущего: ГГГГ-ММ-ДД, либо '-'.")
+        return
+    await state.update_data(profile_since=since.isoformat() if since else None)
+    await state.set_state(AdminUserStates.stats_reason)
+    await message.answer("Укажи причину корректировки. Она сохранится в журнале администратора.")
+
+
+@dp.message(AdminUserStates.stats_reason)
+async def admin_profile_reason(message: Message, state: FSMContext) -> None:
+    if message.from_user.id != settings.superadmin_id:
+        await state.clear()
+        return
+    reason = (message.text or "").strip()
+    if not reason or len(reason) > 500:
+        await message.answer("Причина должна содержать от 1 до 500 символов.")
+        return
+    data = await state.get_data()
+    telegram_id = int(data["admin_target_id"])
+    try:
+        async with SessionFactory() as session, session.begin():
+            user = await session.scalar(
+                select(User).where(User.telegram_id == telegram_id).with_for_update()
+            )
+            if user is None:
+                raise ValueError("Пользователь не найден.")
+            total = await session.scalar(select(func.count(Deal.id)).where(
+                or_(Deal.buyer_id == user.id, Deal.seller_id == user.id)
+            )) or 0
+            successful = await session.scalar(select(func.count(Deal.id)).where(
+                or_(Deal.buyer_id == user.id, Deal.seller_id == user.id),
+                Deal.status == "completed",
+            )) or 0
+            total_value = data["profile_total"] if data["profile_total"] is not None else total
+            successful_value = data["profile_successful"] if data["profile_successful"] is not None else successful
+            if successful_value > total_value:
+                raise ValueError("Успешных сделок не может быть больше общего количества.")
+            updates = {
+                "profile_deals_override": data["profile_total"],
+                "profile_successful_override": data["profile_successful"],
+                "profile_since_override": datetime.fromisoformat(data["profile_since"]) if data["profile_since"] else None,
+            }
+            for field, new_value in updates.items():
+                old_value = getattr(user, field)
+                old_text = old_value.isoformat() if old_value else None
+                new_text = new_value.isoformat() if new_value else None
+                if old_text != new_text:
+                    session.add(UserAdminAudit(
+                        user_id=user.id, actor_telegram_id=message.from_user.id,
+                        field=field, old_value=old_text, new_value=new_text, reason=reason,
+                    ))
+                setattr(user, field, new_value)
+    except (ValueError, SQLAlchemyError) as exc:
+        await message.answer(f"Не удалось сохранить показатели: {exc}")
+        await state.clear()
+        return
+    await state.clear()
+    await message.answer("✅ Показатели профиля сохранены. Исторические сделки не изменялись.")
+    await _admin_user_card(message, telegram_id)
+
+
 @dp.message(Command("admin"))
-async def admin_help(message: Message) -> None:
+async def admin_help(message: Message, state: FSMContext) -> None:
     if message.from_user.id != settings.superadmin_id:
         await message.answer("⛔ Нет доступа.")
         return
+    await state.clear()
     await message.answer(
-        "Администрирование:\n"
-        "/credit ID СУММА ПРИЧИНА — начислить баланс\n"
-        "/debit ID СУММА ПРИЧИНА — списать баланс\n"
-        "/resolve_release ID — выплатить продавцу\n"
-        "/resolve_refund ID — вернуть покупателю\n\n"
-        "Все движения средств записываются в неизменяемый журнал."
+        "🛠 Панель администратора\n\n"
+        "Здесь можно искать пользователей, смотреть фактическую статистику, "
+        "управлять балансом, блокировкой и отображаемыми показателями профиля.\n\n"
+        "Ручные корректировки отмечаются отдельно и попадают в журнал.",
+        reply_markup=admin_main_keyboard(),
     )
 
 
