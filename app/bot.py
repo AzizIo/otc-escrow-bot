@@ -888,7 +888,7 @@ async def admin_crypto_pay_receive_token(message: Message, state: FSMContext) ->
     try:
         await validate_crypto_pay_token(token)
         await save_crypto_pay_token(token)
-    except (aiohttp.ClientError, RuntimeError, SQLAlchemyError):
+    except (aiohttp.ClientError, RuntimeError, TypeError, SQLAlchemyError):
         await message.answer(
             "❌ Не удалось проверить токен. Проверь его в Crypto Pay и попробуй ещё раз. "
             "Старый токен, если он был, не изменён."
