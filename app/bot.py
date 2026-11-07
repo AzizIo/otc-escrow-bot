@@ -1,6 +1,6 @@
 from decimal import Decimal, InvalidOperation
 
-from aiogram import Bot, Dispatcher
+from aiogram import F, Bot, Dispatcher
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.types import (
@@ -9,6 +9,8 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
@@ -29,6 +31,36 @@ from app.services.deals import (
 from app.services.ledger import admin_adjust
 
 dp = Dispatcher()
+
+
+class DealCreation(StatesGroup):
+    seller_id = State()
+    amount = State()
+    description = State()
+    confirm = State()
+
+
+def main_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🤝 Создать сделку", callback_data="menu:create")],
+            [
+                InlineKeyboardButton(text="💰 Мой баланс", callback_data="menu:balance"),
+                InlineKeyboardButton(text="📋 Мои сделки", callback_data="menu:deals"),
+            ],
+            [InlineKeyboardButton(text="ℹ️ Помощь", callback_data="menu:help")],
+        ]
+    )
+
+
+def deal_creation_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Создать сделку", callback_data="create:confirm")],
+            [InlineKeyboardButton(text="✏️ Изменить описание", callback_data="create:edit")],
+            [InlineKeyboardButton(text="✖️ Отмена", callback_data="create:cancel")],
+        ]
+    )
 
 
 def deal_keyboard(deal_id: int, *actions: str) -> InlineKeyboardMarkup:
@@ -91,10 +123,12 @@ async def start(message: Message) -> None:
         )
 
     await message.answer(
-        "Добро пожаловать в OTC Escrow.\n\n"
+        "Добро пожаловать в OTC Escrow 👋\n\n"
+        "Здесь можно безопасно координировать OTC-сделки и отслеживать их этапы.\n"
         "Баланс — внутренняя учётная запись в условных USDT, не реальные токены "
         "и не криптокошелёк.\n\n"
-        "Команды: /balance, /deal, /my_deals, /help."
+        "Выбери нужное действие:",
+        reply_markup=main_menu(),
     )
 
 
@@ -194,49 +228,231 @@ async def debit(message: Message) -> None:
     await _adjust_balance(message, credit=False)
 
 
-@dp.message(Command("deal"))
-async def new_deal(message: Message) -> None:
-    parts = (message.text or "").split(maxsplit=3)
-    if len(parts) != 4:
-        await message.answer(
-            "Создание сделки:\n/deal TELEGRAM_ID_ПРОДАВЦА СУММА ОПИСАНИЕ\n"
-            "Пример: /deal 123456789 25.00 Разработка логотипа"
+async def begin_deal_creation(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(DealCreation.seller_id)
+    await message.answer(
+        "🤝 Создание сделки\n\n"
+        "Шаг 1 из 3 — отправь Telegram ID продавца.\n"
+        "Продавец должен предварительно запустить бота через /start.\n\n"
+        "Для отмены отправь /cancel."
+    )
+
+
+@dp.callback_query(F.data == "menu:create")
+async def menu_create(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.clear()
+    await state.set_state(DealCreation.seller_id)
+    await callback.message.answer(
+        "🤝 Создание сделки\n\n"
+        "Шаг 1 из 3 — отправь Telegram ID продавца.\n"
+        "Продавец должен предварительно запустить бота через /start.\n\n"
+        "Для отмены отправь /cancel."
+    )
+
+
+@dp.callback_query(F.data == "menu:balance")
+async def menu_balance(callback: CallbackQuery) -> None:
+    await callback.answer()
+    async with SessionFactory() as session:
+        account = await session.scalar(
+            select(Account).join(User, User.id == Account.user_id)
+            .where(User.telegram_id == callback.from_user.id)
         )
+    if account is None:
+        await callback.message.answer("Сначала отправь /start.")
         return
+    await callback.message.answer(
+        f"💰 Твой баланс\n\n"
+        f"Доступно: {account.available:.2f} {account.currency}\n"
+        f"В резерве: {account.frozen:.2f} {account.currency}",
+        reply_markup=main_menu(),
+    )
+
+
+@dp.callback_query(F.data == "menu:deals")
+async def menu_deals(callback: CallbackQuery) -> None:
+    await callback.answer()
+    status_labels = {
+        "awaiting_seller": "Ожидает продавца",
+        "awaiting_funding": "Ожидает резерва",
+        "funded": "Средства в резерве",
+        "delivered": "Ожидает подтверждения",
+        "completed": "Завершена",
+        "cancelled": "Отменена",
+        "disputed": "Спор",
+        "refunded": "Возвращена",
+    }
+    async with SessionFactory() as session:
+        user = await session.scalar(
+            select(User).where(User.telegram_id == callback.from_user.id)
+        )
+        if user is None:
+            await callback.message.answer("Сначала отправь /start.")
+            return
+        deals = list(
+            (
+                await session.scalars(
+                    select(Deal)
+                    .where(or_(Deal.buyer_id == user.id, Deal.seller_id == user.id))
+                    .order_by(Deal.created_at.desc())
+                    .limit(10)
+                )
+            ).all()
+        )
+    if not deals:
+        await callback.message.answer("У тебя пока нет сделок.", reply_markup=main_menu())
+        return
+    lines = ["📋 Последние сделки:"]
+    for deal in deals:
+        role = "Покупатель" if deal.buyer_id == user.id else "Продавец"
+        lines.append(
+            f"#{deal.id} · {deal.amount:.2f} USDT · {role}\n"
+            f"{status_labels.get(deal.status, deal.status)}\n{deal.description[:80]}"
+        )
+    await callback.message.answer("\n\n".join(lines), reply_markup=main_menu())
+
+
+@dp.callback_query(F.data == "menu:help")
+async def menu_help(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await callback.message.answer(
+        "Как проходит сделка:\n"
+        "1. Покупатель указывает продавца, сумму и описание.\n"
+        "2. Продавец принимает предложение.\n"
+        "3. Покупатель резервирует внутренний баланс.\n"
+        "4. Продавец отмечает выполнение.\n"
+        "5. Покупатель подтверждает получение.\n"
+        "6. Сумма зачисляется продавцу.\n\n"
+        "Если возникла проблема после резервирования, можно открыть спор.\n\n"
+        "Важно: баланс в USDT — внутренняя единица учёта, не реальные криптоактивы.",
+        reply_markup=main_menu(),
+    )
+
+
+@dp.message(Command("cancel"))
+async def cancel_creation(message: Message, state: FSMContext) -> None:
+    current = await state.get_state()
+    if current is None:
+        await message.answer("Сейчас нечего отменять.", reply_markup=main_menu())
+        return
+    await state.clear()
+    await message.answer("Создание сделки отменено.", reply_markup=main_menu())
+
+
+@dp.message(Command("deal"))
+async def new_deal(message: Message, state: FSMContext) -> None:
+    await begin_deal_creation(message, state)
+
+
+@dp.message(DealCreation.seller_id)
+async def receive_seller_id(message: Message, state: FSMContext) -> None:
+    raw = (message.text or "").strip()
+    if not raw.isdigit() or int(raw) <= 0:
+        await message.answer("Нужен положительный числовой Telegram ID. Попробуй ещё раз.")
+        return
+    if int(raw) == message.from_user.id:
+        await message.answer("Нельзя создать сделку с самим собой. Укажи ID другого пользователя.")
+        return
+    await state.update_data(seller_id=int(raw))
+    await state.set_state(DealCreation.amount)
+    await message.answer("Шаг 2 из 3 — введи сумму сделки в USDT, например: 25.00")
+
+
+@dp.message(DealCreation.amount)
+async def receive_deal_amount(message: Message, state: FSMContext) -> None:
     try:
-        seller_id = int(parts[1])
-        amount = Decimal(parts[2])
+        amount = Decimal((message.text or "").strip().replace(",", "."))
+        if not amount.is_finite() or amount <= 0 or amount.as_tuple().exponent < -2:
+            raise ValueError
+        if amount >= Decimal("10000000000000000"):
+            raise ValueError
+    except (InvalidOperation, ValueError):
+        await message.answer("Введи корректную сумму больше нуля, максимум 2 знака после запятой.")
+        return
+    await state.update_data(amount=str(amount))
+    await state.set_state(DealCreation.description)
+    await message.answer("Шаг 3 из 3 — кратко опиши товар или услугу (до 1000 символов).")
+
+
+@dp.message(DealCreation.description)
+async def receive_deal_description(message: Message, state: FSMContext) -> None:
+    description = (message.text or "").strip()
+    if not description or len(description) > 1000:
+        await message.answer("Описание должно содержать от 1 до 1000 символов. Попробуй ещё раз.")
+        return
+    await state.update_data(description=description)
+    data = await state.get_data()
+    await state.set_state(DealCreation.confirm)
+    await message.answer(
+        "Проверь условия перед созданием:\n\n"
+        f"Продавец: {data['seller_id']}\n"
+        f"Сумма: {Decimal(data['amount']):.2f} USDT\n"
+        f"Описание: {description}\n\n"
+        "Создать сделку?",
+        reply_markup=deal_creation_keyboard(),
+    )
+
+
+@dp.callback_query(F.data == "create:edit", DealCreation.confirm)
+async def edit_deal_description(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.set_state(DealCreation.description)
+    await callback.message.answer("Отправь новое описание сделки (до 1000 символов).")
+
+
+@dp.callback_query(F.data == "create:cancel")
+async def cancel_deal_creation_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.answer("Создание отменено.")
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer("Создание сделки отменено.", reply_markup=main_menu())
+
+
+@dp.callback_query(F.data == "create:confirm", DealCreation.confirm)
+async def confirm_deal_creation(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    try:
         async with SessionFactory() as session, session.begin():
             deal = await create_deal(
                 session,
-                buyer_telegram_id=message.from_user.id,
-                seller_telegram_id=seller_id,
-                amount=amount,
-                description=parts[3],
+                buyer_telegram_id=callback.from_user.id,
+                seller_telegram_id=int(data["seller_id"]),
+                amount=Decimal(data["amount"]),
+                description=data["description"],
             )
-            deal_id, deal_amount, description = deal.id, deal.amount, deal.description
-    except (ValueError, InvalidOperation) as exc:
-        await message.answer(f"Не удалось создать сделку: {exc}")
+            deal_id, amount, description = deal.id, deal.amount, deal.description
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        await state.clear()
         return
     except SQLAlchemyError:
-        await message.answer("Ошибка базы данных. Сделка не создана, попробуйте позже.")
+        await callback.answer("Ошибка базы данных. Попробуй позже.", show_alert=True)
+        await state.clear()
         return
 
-    await message.answer(
-        f"Сделка #{deal_id} создана. Ожидаем принятия продавцом.\n"
-        f"Сумма: {deal_amount:.2f} USDT\nОписание: {description}"
+    await state.clear()
+    await callback.answer("Сделка создана.")
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer(
+        f"✅ Сделка #{deal_id} создана.\n"
+        f"Сумма: {amount:.2f} USDT\nОписание: {description}\n\n"
+        "Ожидаем ответа продавца.",
+        reply_markup=main_menu(),
     )
     try:
-        await message.bot.send_message(
-            seller_id,
-            f"Вам предложена сделка #{deal_id}.\nСумма: {deal_amount:.2f} USDT\n"
-            f"Описание: {description}\n\nПримите или отклоните предложение.",
+        await callback.bot.send_message(
+            int(data["seller_id"]),
+            f"🤝 Вам предложена сделка #{deal_id}.\n"
+            f"Сумма: {amount:.2f} USDT\nОписание: {description}\n\n"
+            "Примите или отклоните предложение.",
             reply_markup=deal_keyboard(deal_id, "accept", "cancel"),
         )
     except TelegramAPIError:
-        await message.answer(
-            f"Сделка #{deal_id} создана, но уведомление продавцу не доставлено. "
-            "Проверьте, что продавец запустил бота через /start."
+        await callback.message.answer(
+            "⚠️ Сделка создана, но уведомление продавцу не доставлено. "
+            "Убедитесь, что продавец запускал бота через /start."
         )
 
 
