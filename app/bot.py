@@ -259,7 +259,8 @@ async def menu_create(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @dp.callback_query(F.data == "menu:balance")
-async def menu_balance(callback: CallbackQuery) -> None:
+async def menu_balance(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
     await callback.answer()
     async with SessionFactory() as session:
         account = await session.scalar(
@@ -278,7 +279,8 @@ async def menu_balance(callback: CallbackQuery) -> None:
 
 
 @dp.callback_query(F.data == "menu:deals")
-async def menu_deals(callback: CallbackQuery) -> None:
+async def menu_deals(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
     await callback.answer()
     status_labels = {
         "awaiting_seller": "Ожидает продавца",
@@ -321,7 +323,8 @@ async def menu_deals(callback: CallbackQuery) -> None:
 
 
 @dp.callback_query(F.data == "menu:help")
-async def menu_help(callback: CallbackQuery) -> None:
+async def menu_help(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
     await callback.answer()
     await callback.message.answer(
         "Как проходит сделка:\n"
