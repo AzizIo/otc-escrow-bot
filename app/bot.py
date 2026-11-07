@@ -725,13 +725,13 @@ def deal_card_text(deal: Deal, *, role: str, counterparty: str) -> str:
         deal.status, ("📌", deal.status, "Статус сделки.")
     )
     return (
-        f"🤝 <b>СДЕЛКА №{deal.id}</b>\\n"
-        f"━━━━━━━━━━━━━━━━━━\\n"
-        f"💰 <b>{deal.amount:.2f} USDT</b>\\n"
-        f"{icon} <b>{html.escape(status)}</b>\\n"
-        f"👤 <b>Ваша роль:</b> {role}\\n"
-        f"🧑‍💻 <b>Контрагент:</b> {html.escape(counterparty)}\\n"
-        f"📦 <b>Условия:</b> {html.escape(deal.description[:180])}\\n\\n"
+        f"🤝 <b>СДЕЛКА №{deal.id}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"💰 <b>{deal.amount:.2f} USDT</b>\n"
+        f"{icon} <b>{html.escape(status)}</b>\n"
+        f"👤 <b>Ваша роль:</b> {role}\n"
+        f"🧑‍💻 <b>Контрагент:</b> {html.escape(counterparty)}\n"
+        f"📦 <b>Условия:</b> {html.escape(deal.description[:180])}\n\n"
         f"💡 <i>{hint}</i>"
     )
 
@@ -763,7 +763,7 @@ async def menu_deals(callback: CallbackQuery, state: FSMContext) -> None:
     if not cards:
         await send_hero(
             callback.message,
-            "📋 <b>МОИ СДЕЛКИ</b>\\n\\n"
+            "📋 <b>МОИ СДЕЛКИ</b>\n\n"
             "Пока здесь пусто. Создай первую сделку — её статус всегда будет под рукой.",
             reply_markup=main_menu(callback.from_user.id),
             photo_url=DEAL_BANNER_URL,
@@ -771,9 +771,9 @@ async def menu_deals(callback: CallbackQuery, state: FSMContext) -> None:
         return
     await send_hero(
         callback.message,
-        "📋 <b>МОИ СДЕЛКИ</b>\\n"
-        "━━━━━━━━━━━━━━━━━━\\n"
-        f"🗂 Найдено сделок: <b>{len(cards)}</b>\\n\\n"
+        "📋 <b>МОИ СДЕЛКИ</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"🗂 Найдено сделок: <b>{len(cards)}</b>\n\n"
         "Каждая сделка — отдельная карточка с суммой, участником и статусом.",
         photo_url=DEAL_BANNER_URL,
     )
@@ -809,9 +809,9 @@ async def my_deal_details(callback: CallbackQuery) -> None:
         counterparty = user_label(other) if other else f"ID {other_id}"
     await callback.answer()
     await callback.message.answer(
-        "🧾 <b>ПОДРОБНОСТИ СДЕЛКИ</b>\\n━━━━━━━━━━━━━━━━━━\\n"
+        "🧾 <b>ПОДРОБНОСТИ СДЕЛКИ</b>\n━━━━━━━━━━━━━━━━━━\n"
         + deal_card_text(deal, role=role, counterparty=counterparty)
-        + f"\\n\\n🆔 <b>Внутренний ID:</b> <code>{deal.id}</code>",
+        + f"\n\n🆔 <b>Внутренний ID:</b> <code>{deal.id}</code>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [ui_button(text="📋 Все мои сделки", callback_data="menu:deals", style="primary")],
