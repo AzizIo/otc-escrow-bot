@@ -9,6 +9,7 @@ from aiogram.types import (
     Message,
 )
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.config import settings
 from app.db import SessionFactory
@@ -65,19 +66,27 @@ async def participant_ids(session, deal: Deal) -> tuple[int, int]:
 @dp.message(Command("start"))
 async def start(message: Message) -> None:
     async with SessionFactory() as session, session.begin():
-        user = await session.scalar(select(User).where(User.telegram_id == message.from_user.id))
-        if user is None:
-            user = User(
+        await session.execute(
+            pg_insert(User)
+            .values(
                 telegram_id=message.from_user.id,
                 username=message.from_user.username,
                 full_name=message.from_user.full_name,
             )
-            session.add(user)
-            await session.flush()
-            session.add(Account(user_id=user.id, currency=settings.currency))
-        else:
-            user.username = message.from_user.username
-            user.full_name = message.from_user.full_name
+            .on_conflict_do_nothing(index_elements=[User.telegram_id])
+        )
+        user = await session.scalar(
+            select(User).where(User.telegram_id == message.from_user.id).with_for_update()
+        )
+        if user is None:
+            raise RuntimeError("Could not register Telegram user.")
+        user.username = message.from_user.username
+        user.full_name = message.from_user.full_name
+        await session.execute(
+            pg_insert(Account)
+            .values(user_id=user.id, currency=settings.currency)
+            .on_conflict_do_nothing(index_elements=[Account.user_id])
+        )
 
     await message.answer(
         "Добро пожаловать в OTC Escrow.\n\n"
