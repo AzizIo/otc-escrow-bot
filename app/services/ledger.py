@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,7 +10,7 @@ CENT = Decimal("0.01")
 
 
 def money(value: Decimal | str | int) -> Decimal:
-    amount = Decimal(str(value)).quantize(CENT)
+    amount = Decimal(str(value)).quantize(CENT, rounding=ROUND_HALF_UP)
     if amount <= 0:
         raise ValueError("Amount must be greater than zero")
     return amount
