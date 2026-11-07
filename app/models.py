@@ -45,6 +45,9 @@ class User(Base):
     full_name: Mapped[str | None] = mapped_column(String(160))
     is_blocked: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    profile_deals_override: Mapped[int | None] = mapped_column()
+    profile_successful_override: Mapped[int | None] = mapped_column()
+    profile_since_override: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Account(Base):
@@ -101,6 +104,22 @@ class CryptoDeposit(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     amount: Mapped[Decimal] = mapped_column(Numeric(18, 2))
     status: Mapped[str] = mapped_column(String(24), default="active", index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+
+class UserAdminAudit(Base):
+    __tablename__ = "user_admin_audit"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    actor_telegram_id: Mapped[int] = mapped_column(BigInteger)
+    field: Mapped[str] = mapped_column(String(48))
+    old_value: Mapped[str | None] = mapped_column(Text)
+    new_value: Mapped[str | None] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
