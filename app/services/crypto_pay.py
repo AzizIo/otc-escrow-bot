@@ -8,22 +8,31 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.db import SessionFactory
-from app.models import Account, CryptoDeposit, LedgerEntry, User
+from app.models import Account, AppSetting, CryptoDeposit, LedgerEntry, User
 
 logger = logging.getLogger(__name__)
 POLL_INTERVAL_SECONDS = 15
 MAX_BATCH_SIZE = 100
+TOKEN_SETTING_KEY = "crypto_pay_api_token"
+
+
+async def get_crypto_pay_token() -> str | None:
+    async with SessionFactory() as session:
+        setting = await session.get(AppSetting, TOKEN_SETTING_KEY)
+        return setting.value if setting and setting.value else None
+
+
+async def has_crypto_pay_token() -> bool:
+    return bool(await get_crypto_pay_token())
 
 
 async def _api_request(
     http: aiohttp.ClientSession,
+    token: str,
     method: str,
     payload: dict | None = None,
 ) -> dict | list:
-    if not settings.crypto_pay_api_token:
-        raise RuntimeError("CRYPTO_PAY_API_TOKEN is not configured")
-
-    headers = {"Crypto-Pay-API-Token": settings.crypto_pay_api_token}
+    headers = {"Crypto-Pay-API-Token": token}
     url = f"{settings.crypto_pay_api_base.rstrip('/')}/{method}"
     async with http.post(url, json=payload or {}, headers=headers) as response:
         response.raise_for_status()
@@ -34,13 +43,42 @@ async def _api_request(
     return data["result"]
 
 
+async def validate_crypto_pay_token(token: str) -> None:
+    timeout = aiohttp.ClientTimeout(total=15)
+    async with aiohttp.ClientSession(timeout=timeout) as http:
+        result = await _api_request(http, token, "getMe")
+    if not isinstance(result, dict):
+        raise RuntimeError("Crypto Pay returned an invalid account response")
+
+
+async def save_crypto_pay_token(token: str) -> None:
+    async with SessionFactory() as session, session.begin():
+        setting = await session.get(AppSetting, TOKEN_SETTING_KEY, with_for_update=True)
+        if setting is None:
+            session.add(AppSetting(key=TOKEN_SETTING_KEY, value=token))
+        else:
+            setting.value = token
+
+
+async def delete_crypto_pay_token() -> None:
+    async with SessionFactory() as session, session.begin():
+        setting = await session.get(AppSetting, TOKEN_SETTING_KEY, with_for_update=True)
+        if setting is not None:
+            await session.delete(setting)
+
+
 async def create_deposit_invoice(*, telegram_id: int, amount: Decimal) -> dict:
+    token = await get_crypto_pay_token()
+    if not token:
+        raise RuntimeError("Crypto Pay is not configured by the administrator")
+
     amount = amount.quantize(Decimal("0.01"))
     async with aiohttp.ClientSession(
         timeout=aiohttp.ClientTimeout(total=20)
     ) as http:
         invoice = await _api_request(
             http,
+            token,
             "createInvoice",
             {
                 "currency_type": "crypto",
@@ -137,14 +175,15 @@ async def _credit_paid_invoice(invoice: dict) -> tuple[int, Decimal, str] | None
 
 
 async def poll_crypto_pay_invoices(bot: Bot) -> None:
-    if not settings.crypto_pay_api_token:
-        logger.warning("Crypto Pay is disabled: CRYPTO_PAY_API_TOKEN is not configured")
-        return
-
     timeout = aiohttp.ClientTimeout(total=20)
     async with aiohttp.ClientSession(timeout=timeout) as http:
         while True:
             try:
+                token = await get_crypto_pay_token()
+                if not token:
+                    await asyncio.sleep(POLL_INTERVAL_SECONDS)
+                    continue
+
                 async with SessionFactory() as session:
                     deposits = list(
                         (
@@ -161,6 +200,7 @@ async def poll_crypto_pay_invoices(bot: Bot) -> None:
                     invoice_ids = ",".join(str(item.invoice_id) for item in deposits)
                     invoices = await _api_request(
                         http,
+                        token,
                         "getInvoices",
                         {"invoice_ids": invoice_ids, "count": len(deposits)},
                     )
