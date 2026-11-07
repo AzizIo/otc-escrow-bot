@@ -43,6 +43,10 @@ class TopUp(StatesGroup):
     amount = State()
 
 
+class CryptoPayAdmin(StatesGroup):
+    token = State()
+
+
 class AdminUserStates(StatesGroup):
     search = State()
     balance_amount = State()
@@ -306,10 +310,9 @@ async def menu_balance(callback: CallbackQuery, state: FSMContext) -> None:
 async def menu_topup(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.clear()
-    if not settings.crypto_pay_api_token:
+    if not await has_crypto_pay_token():
         await callback.message.answer(
-            "Пополнение пока не подключено. Администратору нужно добавить "
-            "CRYPTO_PAY_API_TOKEN в .env."
+            "Пополнение пока не подключено. Администратор ещё не настроил Crypto Pay."
         )
         return
     await state.set_state(TopUp.amount)
@@ -708,6 +711,7 @@ def admin_main_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔎 Найти пользователя", callback_data="adminpanel:find")],
         [InlineKeyboardButton(text="📊 Общая статистика", callback_data="adminpanel:stats")],
+        [InlineKeyboardButton(text="⚙️ Crypto Pay", callback_data="adminpanel:cryptopay")],
     ])
 
 
