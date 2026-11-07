@@ -212,12 +212,124 @@ def admin_deal_keyboard(deal_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def user_label(user: User) -> str:
+    name = re.sub(r"\\s+", " ", (user.full_name or "").strip()) or "Без имени"
+    username = f"@{user.username}" if user.username else "без username"
+    return f"{name} ({username}, ID {user.telegram_id})"
+
+
 async def participant_ids(session, deal: Deal) -> tuple[int, int]:
     buyer = await session.get(User, deal.buyer_id)
     seller = await session.get(User, deal.seller_id)
     if buyer is None or seller is None:
         raise ValueError("Не удалось найти участников сделки.")
     return buyer.telegram_id, seller.telegram_id
+
+
+async def participant_labels(session, deal: Deal) -> tuple[str, str]:
+    buyer = await session.get(User, deal.buyer_id)
+    seller = await session.get(User, deal.seller_id)
+    if buyer is None or seller is None:
+        raise ValueError("Не удалось найти участников сделки.")
+    return user_label(buyer), user_label(seller)
+
+
+async def recent_users(exclude_telegram_id: int, limit: int = 8) -> list[User]:
+    async with SessionFactory() as session:
+        return list((await session.scalars(
+            select(User)
+            .where(User.telegram_id != exclude_telegram_id, User.is_blocked.is_(False))
+            .order_by(User.created_at.desc())
+            .limit(limit)
+        )).all())
+
+
+def seller_picker_keyboard(users: list[User]) -> InlineKeyboardMarkup:
+    rows = []
+    for user in users:
+        title = (user.full_name or (f"@{user.username}" if user.username else str(user.telegram_id)))
+        title = re.sub(r"\\s+", " ", title).strip()[:28]
+        suffix = f" · @{user.username}" if user.username else f" · ID {user.telegram_id}"
+        rows.append([ui_button(
+            text=f"👤 {title}{suffix}"[:60],
+            callback_data=f"create:seller:{user.telegram_id}",
+        )])
+    rows.append([ui_button(text="🔎 Найти по ID или @username", callback_data="create:search")])
+    rows.append([ui_button(text="✖️ Отмена", callback_data="create:cancel", style="danger")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def deal_amount_keyboard() -> InlineKeyboardMarkup:
+    amounts = ("10", "25", "50", "100", "250", "500")
+    rows = [
+        [ui_button(text=f"💵 {amount} USDT", callback_data=f"create:amount:{amount}", style="success")]
+        for amount in amounts
+    ]
+    rows.append([ui_button(text="⌨️ Другая сумма", callback_data="create:amount:custom")])
+    rows.append([ui_button(text="✖️ Отмена", callback_data="create:cancel", style="danger")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def show_seller_picker(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(DealCreation.seller_id)
+    users = await recent_users(message.from_user.id)
+    await send_hero(
+        message,
+        "<b>🤝 Новая OTC-сделка</b>\n\n"
+        "Выбери продавца из последних зарегистрированных пользователей "
+        "или найди его по Telegram ID / @username.\n\n"
+        "🔐 Продавец должен хотя бы один раз открыть этого бота.",
+        reply_markup=seller_picker_keyboard(users),
+    )
+
+
+async def show_amount_step(message: Message) -> None:
+    await message.answer(
+        "💰 <b>Шаг 2 из 3 — сумма сделки</b>\n\n"
+        "Выбери готовую сумму или нажми «Другая сумма».",
+        parse_mode="HTML",
+        reply_markup=deal_amount_keyboard(),
+    )
+
+
+async def show_admin_users_page(message: Message, page: int = 0) -> None:
+    page = max(0, page)
+    page_size = 8
+    async with SessionFactory() as session:
+        total = await session.scalar(select(func.count(User.id))) or 0
+        pages = max(1, (total + page_size - 1) // page_size)
+        page = min(page, pages - 1)
+        users = list((await session.scalars(
+            select(User).order_by(User.created_at.desc())
+            .offset(page * page_size).limit(page_size)
+        )).all())
+
+    rows = []
+    for user in users:
+        title = (user.full_name or "Без имени").replace("\\n", " ").strip()[:25]
+        handle = f"@{user.username}" if user.username else f"ID {user.telegram_id}"
+        rows.append([ui_button(
+            text=f"👤 {title} · {handle}"[:60],
+            callback_data=f"adminusers:select:{user.telegram_id}",
+        )])
+    rows.append([ui_button(text="🔎 Поиск по ID / @username", callback_data="adminusers:search")])
+    nav = []
+    if page > 0:
+        nav.append(ui_button(text="⬅️ Назад", callback_data=f"adminusers:page:{page - 1}"))
+    if page < pages - 1:
+        nav.append(ui_button(text="Вперёд ➡️", callback_data=f"adminusers:page:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([ui_button(text="🏠 Админ-панель", callback_data="adminpanel:home")])
+    await send_hero(
+        message,
+        f"<b>👥 Пользователи платформы</b>\\n\\n"
+        f"Всего зарегистрировано: <b>{total}</b>\\n"
+        f"Страница: <b>{page + 1}/{pages}</b>\\n\\n"
+        "Выбери пользователя или воспользуйся поиском.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
 
 
 @dp.message(Command("start"))
@@ -367,26 +479,74 @@ async def debit(message: Message) -> None:
 
 
 async def begin_deal_creation(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    await state.set_state(DealCreation.seller_id)
-    await message.answer(
-        "🤝 Создание сделки\n\n"
-        "Шаг 1 из 3 — отправь Telegram ID продавца.\n"
-        "Продавец должен предварительно запустить бота через /start.\n\n"
-        "Для отмены отправь /cancel."
-    )
+    await show_seller_picker(message, state)
 
 
 @dp.callback_query(F.data == "menu:create")
 async def menu_create(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    await state.clear()
+    await show_seller_picker(callback.message, state)
+
+
+@dp.callback_query(F.data == "create:search")
+async def create_search_seller(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(DealCreation.seller_id)
+    await callback.answer()
     await callback.message.answer(
-        "🤝 Создание сделки\n\n"
-        "Шаг 1 из 3 — отправь Telegram ID продавца.\n"
-        "Продавец должен предварительно запустить бота через /start.\n\n"
-        "Для отмены отправь /cancel."
+        "🔎 Отправь Telegram ID или @username продавца.\n"
+        "Например: <code>123456789</code> или <code>@username</code>.\n\n"
+        "Найти можно только пользователя, который уже запускал бота.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [ui_button(text="✖️ Отмена", callback_data="create:cancel", style="danger")]
+        ]),
+    )
+
+
+@dp.callback_query(F.data.startswith("create:seller:"))
+async def create_select_seller(callback: CallbackQuery, state: FSMContext) -> None:
+    try:
+        telegram_id = int(callback.data.rsplit(":", 1)[1])
+        if telegram_id == callback.from_user.id:
+            raise ValueError("Нельзя создать сделку с самим собой.")
+        async with SessionFactory() as session:
+            seller = await session.scalar(select(User).where(User.telegram_id == telegram_id))
+            if seller is None or seller.is_blocked:
+                raise ValueError("Этот пользователь недоступен для сделки.")
+            label = user_label(seller)
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await state.update_data(seller_id=telegram_id, seller_label=label)
+    await state.set_state(DealCreation.amount)
+    await callback.answer("Продавец выбран.")
+    await show_amount_step(callback.message)
+
+
+@dp.callback_query(F.data.startswith("create:amount:"))
+async def create_choose_amount(callback: CallbackQuery, state: FSMContext) -> None:
+    raw = callback.data.rsplit(":", 1)[1]
+    if raw == "custom":
+        await state.set_state(DealCreation.amount)
+        await callback.answer()
+        await callback.message.answer(
+            "⌨️ Введи сумму в USDT, например <code>75.50</code>.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [ui_button(text="✖️ Отмена", callback_data="create:cancel", style="danger")]
+            ]),
+        )
+        return
+    await state.update_data(amount=raw)
+    await state.set_state(DealCreation.description)
+    await callback.answer(f"Сумма {raw} USDT выбрана.")
+    await callback.message.answer(
+        "📝 <b>Шаг 3 из 3 — описание</b>\n\n"
+        "Кратко опиши товар или услугу (до 1000 символов).",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [ui_button(text="✖️ Отмена", callback_data="create:cancel", style="danger")]
+        ]),
     )
 
 
@@ -551,15 +711,31 @@ async def new_deal(message: Message, state: FSMContext) -> None:
 @dp.message(DealCreation.seller_id)
 async def receive_seller_id(message: Message, state: FSMContext) -> None:
     raw = (message.text or "").strip()
-    if not raw.isdigit() or int(raw) <= 0:
-        await message.answer("Нужен положительный числовой Telegram ID. Попробуй ещё раз.")
-        return
-    if int(raw) == message.from_user.id:
-        await message.answer("Нельзя создать сделку с самим собой. Укажи ID другого пользователя.")
-        return
-    await state.update_data(seller_id=int(raw))
+    async with SessionFactory() as session:
+        if raw.isdigit() and int(raw) > 0:
+            seller = await session.scalar(select(User).where(User.telegram_id == int(raw)))
+        else:
+            username = raw.removeprefix("@").strip().lower()
+            seller = await session.scalar(
+                select(User).where(func.lower(User.username) == username)
+            ) if username else None
+        if seller is None:
+            await message.answer(
+                "❌ Пользователь не найден. Проверь Telegram ID или @username. "
+                "Он должен предварительно запустить бота."
+            )
+            return
+        if seller.telegram_id == message.from_user.id:
+            await message.answer("Нельзя создать сделку с самим собой. Выбери другого продавца.")
+            return
+        if seller.is_blocked:
+            await message.answer("Этот пользователь не может участвовать в сделках.")
+            return
+        seller_id = seller.telegram_id
+        label = user_label(seller)
+    await state.update_data(seller_id=seller_id, seller_label=label)
     await state.set_state(DealCreation.amount)
-    await message.answer("Шаг 2 из 3 — введи сумму сделки в USDT, например: 25.00")
+    await show_amount_step(message)
 
 
 @dp.message(DealCreation.amount)
@@ -575,7 +751,14 @@ async def receive_deal_amount(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(amount=str(amount))
     await state.set_state(DealCreation.description)
-    await message.answer("Шаг 3 из 3 — кратко опиши товар или услугу (до 1000 символов).")
+    await message.answer(
+        "📝 <b>Шаг 3 из 3 — описание</b>\\n\\n"
+        "Кратко опиши товар или услугу (до 1000 символов).",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [ui_button(text="✖️ Отмена", callback_data="create:cancel", style="danger")]
+        ]),
+    )
 
 
 @dp.message(DealCreation.description)
@@ -588,13 +771,33 @@ async def receive_deal_description(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     await state.set_state(DealCreation.confirm)
     await message.answer(
-        "Проверь условия перед созданием:\n\n"
-        f"Продавец: {data['seller_id']}\n"
-        f"Сумма: {Decimal(data['amount']):.2f} USDT\n"
-        f"Описание: {description}\n\n"
-        "Создать сделку?",
-        reply_markup=deal_creation_keyboard(),
+        "🧾 <b>Проверь условия сделки</b>\\n\\n"
+        f"👤 Продавец: {html.escape(data.get('seller_label', str(data['seller_id'])))}\\n"
+        f"💰 Сумма: <b>{Decimal(data['amount']):.2f} USDT</b>\\n"
+        f"📦 Условия: {html.escape(description)}\\n\\n"
+        "Всё верно? После подтверждения продавцу придёт уведомление.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [ui_button(text="✅ Создать сделку", callback_data="create:confirm", style="success")],
+            [ui_button(text="💰 Изменить сумму", callback_data="create:edit_amount")],
+            [ui_button(text="👤 Изменить продавца", callback_data="create:edit_seller")],
+            [ui_button(text="📝 Изменить описание", callback_data="create:edit")],
+            [ui_button(text="✖️ Отмена", callback_data="create:cancel", style="danger")],
+        ]),
     )
+
+
+@dp.callback_query(F.data == "create:edit_amount", DealCreation.confirm)
+async def edit_deal_amount(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.set_state(DealCreation.amount)
+    await show_amount_step(callback.message)
+
+
+@dp.callback_query(F.data == "create:edit_seller", DealCreation.confirm)
+async def edit_deal_seller(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await show_seller_picker(callback.message, state)
 
 
 @dp.callback_query(F.data == "create:edit", DealCreation.confirm)
@@ -625,6 +828,10 @@ async def confirm_deal_creation(callback: CallbackQuery, state: FSMContext) -> N
                 description=data["description"],
             )
             deal_id, amount, description = deal.id, deal.amount, deal.description
+            buyer = await session.scalar(select(User).where(User.telegram_id == callback.from_user.id))
+            seller = await session.scalar(select(User).where(User.telegram_id == int(data["seller_id"])))
+            buyer_name = user_label(buyer) if buyer else str(callback.from_user.id)
+            seller_name = user_label(seller) if seller else str(data["seller_id"])
     except ValueError as exc:
         await callback.answer(str(exc), show_alert=True)
         await state.clear()
@@ -638,17 +845,25 @@ async def confirm_deal_creation(callback: CallbackQuery, state: FSMContext) -> N
     await callback.answer("Сделка создана.")
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer(
-        f"✅ Сделка #{deal_id} создана.\n"
-        f"Сумма: {amount:.2f} USDT\nОписание: {description}\n\n"
-        "Ожидаем ответа продавца.",
+        f"✅ <b>Сделка #{deal_id} создана</b>\\n\\n"
+        f"👤 Покупатель: {html.escape(buyer_name)}\\n"
+        f"👤 Продавец: {html.escape(seller_name)}\\n"
+        f"💰 Сумма: <b>{amount:.2f} USDT</b>\\n"
+        f"📦 Условия: {html.escape(description)}\\n\\n"
+        "⏳ Ожидаем ответа продавца.",
+        parse_mode="HTML",
         reply_markup=main_menu(),
     )
     try:
         await callback.bot.send_message(
             int(data["seller_id"]),
-            f"🤝 Вам предложена сделка #{deal_id}.\n"
-            f"Сумма: {amount:.2f} USDT\nОписание: {description}\n\n"
-            "Примите или отклоните предложение.",
+            f"🤝 <b>Вам предложена сделка #{deal_id}</b>\\n\\n"
+            f"👤 Покупатель: {html.escape(buyer_name)}\\n"
+            f"👤 Вы — продавец: {html.escape(seller_name)}\\n"
+            f"💰 Сумма: <b>{amount:.2f} USDT</b>\\n"
+            f"📦 Условия: {html.escape(description)}\\n\\n"
+            "Выберите действие:",
+            parse_mode="HTML",
             reply_markup=deal_keyboard(deal_id, "accept", "cancel"),
         )
     except TelegramAPIError:
@@ -692,27 +907,52 @@ async def deal_action(callback: CallbackQuery) -> None:
                 raise ValueError("Неизвестное действие.")
             deal_id = deal.id
             buyer_id, seller_id = await participant_ids(session, deal)
+            buyer_name, seller_name = await participant_labels(session, deal)
+            deal_amount, deal_description = deal.amount, deal.description
 
         await callback.answer("Готово.")
         if action == "accept":
             await callback.message.edit_reply_markup(reply_markup=None)
             await callback.bot.send_message(
-                buyer_id, f"Продавец принял сделку #{deal_id}. Теперь зарезервируйте сумму.",
+                buyer_id,
+                f"🤝 <b>Продавец принял сделку #{deal_id}</b>\\n\\n"
+                f"👤 Покупатель: {html.escape(buyer_name)}\\n"
+                f"👤 Продавец: {html.escape(seller_name)}\\n"
+                f"💰 Сумма: {deal_amount:.2f} USDT\\n"
+                f"📦 Условия: {html.escape(deal_description)}\\n\\n"
+                "Теперь зарезервируйте сумму.",
+                parse_mode="HTML",
                 reply_markup=deal_keyboard(deal_id, "fund", "cancel"),
             )
         elif action == "fund":
             await callback.message.edit_reply_markup(reply_markup=None)
             await callback.bot.send_message(
-                seller_id, f"Средства по сделке #{deal_id} зарезервированы. Выполните обязательства.",
+                seller_id,
+                f"🔒 <b>Средства по сделке #{deal_id} зарезервированы</b>\\n\\n"
+                f"👤 Покупатель: {html.escape(buyer_name)}\\n"
+                f"👤 Продавец: {html.escape(seller_name)}\\n"
+                f"💰 Сумма: {deal_amount:.2f} USDT\\n"
+                f"📦 Условия: {html.escape(deal_description)}\\n\\n"
+                "Выполните обязательства и отметьте это кнопкой ниже.",
+                parse_mode="HTML",
                 reply_markup=deal_keyboard(deal_id, "delivered", "dispute"),
             )
             await callback.bot.send_message(
-                buyer_id, f"Сумма по сделке #{deal_id} находится в резерве."
+                buyer_id,
+                f"🔒 Сумма по сделке #{deal_id} находится в резерве.\\n"
+                f"👤 Продавец: {html.escape(seller_name)}\\n"
+                f"💰 {deal_amount:.2f} USDT"
             )
         elif action == "delivered":
             await callback.message.edit_reply_markup(reply_markup=None)
             await callback.bot.send_message(
-                buyer_id, f"Продавец отметил выполнение сделки #{deal_id}. Подтвердите получение.",
+                buyer_id,
+                f"📦 <b>Продавец отметил выполнение сделки #{deal_id}</b>\\n\\n"
+                f"👤 Продавец: {html.escape(seller_name)}\\n"
+                f"💰 Сумма: {deal_amount:.2f} USDT\\n"
+                f"📦 Условия: {html.escape(deal_description)}\\n\\n"
+                "Проверь результат и подтверди получение.",
+                parse_mode="HTML",
                 reply_markup=deal_keyboard(deal_id, "confirm", "dispute"),
             )
         elif action == "confirm":
@@ -720,7 +960,12 @@ async def deal_action(callback: CallbackQuery) -> None:
             for telegram_id in {buyer_id, seller_id}:
                 await callback.bot.send_message(
                     telegram_id,
-                    f"✅ Сделка #{deal_id} завершена. Средства зачислены продавцу."
+                    f"✅ <b>Сделка #{deal_id} завершена</b>\\n\\n"
+                    f"👤 Покупатель: {html.escape(buyer_name)}\\n"
+                    f"👤 Продавец: {html.escape(seller_name)}\\n"
+                    f"💰 Сумма: {deal_amount:.2f} USDT\\n"
+                    "Средства зачислены продавцу.",
+                    parse_mode="HTML",
                 )
         elif action in ("dispute", "cancel"):
             await callback.message.edit_reply_markup(reply_markup=None)
@@ -813,7 +1058,7 @@ async def resolve_refund(message: Message) -> None:
 
 def admin_main_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [ui_button(text="🔎 Найти пользователя", callback_data="adminpanel:find")],
+        [ui_button(text="👥 Пользователи", callback_data="adminpanel:find")],
         [ui_button(text="📊 Общая статистика", callback_data="adminpanel:stats")],
         [ui_button(text="⚙️ Crypto Pay", callback_data="adminpanel:cryptopay")],
     ])
@@ -829,7 +1074,8 @@ def admin_user_keyboard(user: User) -> InlineKeyboardMarkup:
         [ui_button(text=status_label, callback_data=f"adminuser:{status_action}:{user.telegram_id}")],
         [ui_button(text="📋 Последние сделки", callback_data=f"adminuser:deals:{user.telegram_id}")],
         [ui_button(text="🧾 История изменений", callback_data=f"adminuser:audit:{user.telegram_id}")],
-        [ui_button(text="⬅️ Админ-панель", callback_data="adminpanel:home")],
+        [ui_button(text="⬅️ К списку пользователей", callback_data="adminpanel:find")],
+        [ui_button(text="🏠 Админ-панель", callback_data="adminpanel:home")],
     ])
 
 
@@ -1018,9 +1264,53 @@ async def admin_panel_find(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer("Нет доступа.", show_alert=True)
         return
     await state.clear()
+    await callback.answer()
+    await show_admin_users_page(callback.message, 0)
+
+
+@dp.callback_query(F.data.startswith("adminusers:page:"))
+async def admin_users_page(callback: CallbackQuery) -> None:
+    if callback.from_user.id != settings.superadmin_id:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    try:
+        page = int(callback.data.rsplit(":", 1)[1])
+    except ValueError:
+        await callback.answer("Некорректная страница.", show_alert=True)
+        return
+    await callback.answer()
+    await show_admin_users_page(callback.message, page)
+
+
+@dp.callback_query(F.data.startswith("adminusers:select:"))
+async def admin_users_select(callback: CallbackQuery) -> None:
+    if callback.from_user.id != settings.superadmin_id:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    try:
+        telegram_id = int(callback.data.rsplit(":", 1)[1])
+    except ValueError:
+        await callback.answer("Некорректный пользователь.", show_alert=True)
+        return
+    await callback.answer()
+    await _admin_user_card(callback.message, telegram_id)
+
+
+@dp.callback_query(F.data == "adminusers:search")
+async def admin_users_search(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user.id != settings.superadmin_id:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    await state.clear()
     await state.set_state(AdminUserStates.search)
     await callback.answer()
-    await callback.message.answer("Отправь Telegram ID или точный @username пользователя.")
+    await callback.message.answer(
+        "🔎 Отправь Telegram ID или @username. Например: <code>123456789</code> или <code>@username</code>.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [ui_button(text="👥 К списку пользователей", callback_data="adminpanel:find")]
+        ]),
+    )
 
 
 @dp.message(AdminUserStates.search)
@@ -1130,13 +1420,29 @@ async def admin_user_action(callback: CallbackQuery, state: FSMContext) -> None:
                 select(Deal).where(or_(Deal.buyer_id == user.id, Deal.seller_id == user.id))
                 .order_by(Deal.created_at.desc()).limit(15)
             )).all())
+            participants = {
+                participant.id: participant
+                for deal in deals
+                for participant in (
+                    await session.get(User, deal.buyer_id),
+                    await session.get(User, deal.seller_id),
+                )
+                if participant is not None
+            }
         await callback.answer()
         if not deals:
             await callback.message.answer("У пользователя пока нет сделок.")
         else:
             lines = ["📋 Последние сделки пользователя:"]
             for deal in deals:
-                lines.append(f"#{deal.id} · {deal.amount:.2f} USDT · {deal.status}\n{deal.description[:100]}")
+                buyer = participants.get(deal.buyer_id)
+                seller = participants.get(deal.seller_id)
+                lines.append(
+                    f"🤝 #{deal.id} · {deal.amount:.2f} USDT · {deal.status}\\n"
+                    f"Покупатель: {user_label(buyer) if buyer else deal.buyer_id}\\n"
+                    f"Продавец: {user_label(seller) if seller else deal.seller_id}\\n"
+                    f"Условия: {deal.description[:100]}"
+                )
             await callback.message.answer("\n\n".join(lines))
         return
 
