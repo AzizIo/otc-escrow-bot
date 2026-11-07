@@ -537,17 +537,23 @@ async def balance(message: Message) -> None:
             select(Account).join(User, User.id == Account.user_id)
             .where(User.telegram_id == message.from_user.id)
         )
-        if account is None:
-            await message.answer("Сначала отправь /start.")
-            return
-        await message.answer(
-            f"Доступно: {account.available:.2f} {account.currency}\n"
-            f"В резерве: {account.frozen:.2f} {account.currency}",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [ui_button(text="➕ Пополнить баланс", callback_data="menu:topup")]
-            ]),
-        )
-
+    if account is None:
+        await message.answer("Сначала открой бота командой /start.")
+        return
+    await message.answer(
+        f"{news_emoji('money')} <b>ТВОЙ БАЛАНС</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        f"🟢 <b>Доступно:</b> {account.available:.2f} {account.currency}\n"
+        f"🔒 <b>В резерве:</b> {account.frozen:.2f} {account.currency}\n"
+        f"💎 <b>Всего:</b> {account.available + account.frozen:.2f} {account.currency}\n\n"
+        "<blockquote>Средства в резерве временно недоступны для новых сделок.</blockquote>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [ui_button(text="➕ Пополнить баланс", callback_data="menu:topup", style="success")],
+            [ui_button(text="🤝 Мои сделки", callback_data="menu:deals")],
+            [ui_button(text="🏠 Главное меню", callback_data="menu:home")],
+        ]),
+    )
 
 @dp.message(Command("my_deals"))
 async def my_deals(message: Message) -> None:
@@ -728,15 +734,22 @@ async def menu_balance(callback: CallbackQuery, state: FSMContext) -> None:
             .where(User.telegram_id == callback.from_user.id)
         )
     if account is None:
-        await callback.message.answer("Сначала отправь /start.")
+        await callback.message.answer("Сначала открой бота командой /start.")
         return
     await callback.message.answer(
-        f"💰 Твой баланс\n\n"
-        f"Доступно: {account.available:.2f} {account.currency}\n"
-        f"В резерве: {account.frozen:.2f} {account.currency}",
-        reply_markup=main_menu(callback.from_user.id),
+        f"{news_emoji('money')} <b>ТВОЙ БАЛАНС</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        f"🟢 <b>Доступно:</b> {account.available:.2f} {account.currency}\n"
+        f"🔒 <b>В резерве:</b> {account.frozen:.2f} {account.currency}\n"
+        f"💎 <b>Всего:</b> {account.available + account.frozen:.2f} {account.currency}\n\n"
+        "<blockquote>Зарезервированные средства временно заблокированы до завершения сделки.</blockquote>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [ui_button(text="➕ Пополнить баланс", callback_data="menu:topup", style="success")],
+            [ui_button(text="📋 История сделок", callback_data="menu:deals")],
+            [ui_button(text="🏠 Главное меню", callback_data="menu:home")],
+        ]),
     )
-
 
 @dp.callback_query(F.data == "menu:topup")
 async def menu_topup(callback: CallbackQuery, state: FSMContext) -> None:
@@ -1023,18 +1036,28 @@ async def menu_help(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await callback.answer()
     await callback.message.answer(
-        "Как проходит сделка:\n"
-        "1. Покупатель указывает продавца, сумму и описание.\n"
-        "2. Продавец принимает предложение.\n"
-        "3. Покупатель резервирует внутренний баланс.\n"
-        "4. Продавец отмечает выполнение.\n"
-        "5. Покупатель подтверждает получение.\n"
-        "6. Сумма зачисляется продавцу.\n\n"
-        "Если возникла проблема после резервирования, можно открыть спор.\n\n"
-        "Важно: баланс в USDT — внутренняя единица учёта, не реальные криптоактивы.",
-        reply_markup=main_menu(callback.from_user.id),
+        f"{news_emoji('info')} <b>ЦЕНТР ПОМОЩИ OTC ESCROW</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "🤝 <b>КАК ПРОХОДИТ СДЕЛКА</b>\n"
+        "1️⃣ Покупатель выбирает продавца, сумму и условия.\n"
+        "2️⃣ Продавец принимает предложение.\n"
+        "3️⃣ Покупатель резервирует средства на внутреннем балансе.\n"
+        "4️⃣ Продавец выполняет обязательства и отмечает это в боте.\n"
+        "5️⃣ Покупатель проверяет результат и подтверждает сделку.\n"
+        "6️⃣ После подтверждения сумма зачисляется продавцу.\n\n"
+        "🛡 <b>ЕСЛИ ВОЗНИКЛА ПРОБЛЕМА</b>\n"
+        "<blockquote>После резервирования средств можно открыть спор. Администратор рассмотрит ситуацию и примет решение.</blockquote>\n"
+        "💡 <b>ВАЖНО ЗНАТЬ</b>\n"
+        "Баланс USDT — внутренняя единица учёта платформы. Это не on-chain кошелёк и не самостоятельное хранение криптовалюты.\n\n"
+        "Нужна помощь? Напиши администратору.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [ui_button(text="🤝 Создать сделку", callback_data="menu:create", style="success")],
+            [ui_button(text="📋 Мои сделки", callback_data="menu:deals")],
+            [ui_button(text="💰 Мой баланс", callback_data="menu:balance")],
+            [ui_button(text="🏠 Главное меню", callback_data="menu:home")],
+        ]),
     )
-
 
 @dp.message(Command("cancel"))
 async def cancel_creation(message: Message, state: FSMContext) -> None:
@@ -1920,14 +1943,25 @@ async def admin_panel_stats(callback: CallbackQuery) -> None:
         deals = await session.scalar(select(func.count(Deal.id))) or 0
         completed = await session.scalar(select(func.count(Deal.id)).where(Deal.status == "completed")) or 0
         disputed = await session.scalar(select(func.count(Deal.id)).where(Deal.status == "disputed")) or 0
+        active = await session.scalar(select(func.count(Deal.id)).where(Deal.status.in_(["awaiting_seller","awaiting_funding","funded","delivered"]))) or 0
         volume = await session.scalar(select(func.coalesce(func.sum(Deal.amount), 0)).where(Deal.status == "completed"))
     await callback.message.answer(
-        f"📊 Статистика биржи\n\nПользователей: {users}\n"
-        f"Сделок всего: {deals}\nУспешных: {completed}\nВ спорах: {disputed}\n"
-        f"Объём завершённых сделок: {Decimal(str(volume or 0)):.2f} USDT",
-        reply_markup=admin_main_keyboard(),
+        f"{news_emoji('stats')} <b>АНАЛИТИКА OTC ESCROW</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        f"👥 <b>Пользователей:</b> {users}\n"
+        f"🤝 <b>Всего сделок:</b> {deals}\n"
+        f"⏳ <b>Активных:</b> {active}\n"
+        f"✅ <b>Завершено:</b> {completed}\n"
+        f"⚠️ <b>В спорах:</b> {disputed}\n\n"
+        f"💎 <b>Оборот завершённых сделок:</b> {Decimal(str(volume or 0)):.2f} USDT\n"
+        "<blockquote>Статистика обновляется на основе данных базы платформы.</blockquote>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [ui_button(text="👥 Пользователи", callback_data="adminpanel:find")],
+            [ui_button(text="📣 Рассылка", callback_data="adminpanel:broadcast")],
+            [ui_button(text="⬅️ Админ-панель", callback_data="adminpanel:home")],
+        ]),
     )
-
 
 @dp.callback_query(lambda c: c.data and c.data.startswith("adminuser:"))
 async def admin_user_action(callback: CallbackQuery, state: FSMContext) -> None:
