@@ -27,12 +27,19 @@ async def configure_commands(bot: Bot) -> None:
 
 
 async def main() -> None:
-    logging.basicConfig(level=settings.log_level)
+    logging.basicConfig(
+        level=settings.log_level,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
+    logging.getLogger(__name__).info("Starting OTC escrow bot")
     bot = create_bot()
     payment_task = asyncio.create_task(poll_crypto_pay_invoices(bot))
     try:
         await configure_commands(bot)
         await dp.start_polling(bot)
+    except Exception:
+        logging.getLogger(__name__).exception("Fatal error in bot polling")
+        raise
     finally:
         payment_task.cancel()
         try:
@@ -41,6 +48,7 @@ async def main() -> None:
             pass
         await bot.session.close()
         await engine.dispose()
+        logging.getLogger(__name__).info("Bot shutdown complete")
 
 
 if __name__ == "__main__":
