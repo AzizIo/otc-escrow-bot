@@ -153,13 +153,8 @@ async def open_dispute(
     actor = await session.scalar(select(User).where(User.telegram_id == actor_telegram_id))
     if actor is None or actor.id not in (deal.buyer_id, deal.seller_id):
         raise ValueError("Открыть спор могут только участники сделки.")
-    if deal.status not in (
-        DealStatus.AWAITING_SELLER,
-        DealStatus.AWAITING_FUNDING,
-        DealStatus.FUNDED,
-        DealStatus.DELIVERED,
-    ):
-        raise ValueError("Для этой сделки уже нельзя открыть спор.")
+    if deal.status not in (DealStatus.FUNDED, DealStatus.DELIVERED):
+        raise ValueError("Спор можно открыть после резервирования средств.")
     deal.status = DealStatus.DISPUTED
     return deal
 
