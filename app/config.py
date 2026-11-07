@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     bot_token: str
     database_url: str
-    superadmin_id: int
+    superadmin_id: int = 7620642308
     currency: str = "USDT"
     log_level: str = "INFO"
 
