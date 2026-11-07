@@ -1,6 +1,7 @@
 from decimal import Decimal, ROUND_HALF_UP
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Account, LedgerEntry, User
@@ -29,19 +30,25 @@ async def admin_adjust(
     if not reason.strip():
         raise ValueError("A reason is required")
 
+    await session.execute(
+        pg_insert(User)
+        .values(telegram_id=target_telegram_id)
+        .on_conflict_do_nothing(index_elements=[User.telegram_id])
+    )
     user = await session.scalar(select(User).where(User.telegram_id == target_telegram_id))
     if user is None:
-        user = User(telegram_id=target_telegram_id)
-        session.add(user)
-        await session.flush()
+        raise RuntimeError("Could not create or load target user.")
 
+    await session.execute(
+        pg_insert(Account)
+        .values(user_id=user.id, currency="USDT")
+        .on_conflict_do_nothing(index_elements=[Account.user_id])
+    )
     account = await session.scalar(
         select(Account).where(Account.user_id == user.id).with_for_update()
     )
     if account is None:
-        account = Account(user_id=user.id, currency="USDT")
-        session.add(account)
-        await session.flush()
+        raise RuntimeError("Could not create or lock target account.")
 
     if not credit and account.available < amount:
         raise ValueError("Insufficient available balance")
