@@ -270,10 +270,12 @@ def deal_amount_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def show_seller_picker(message: Message, state: FSMContext) -> None:
+async def show_seller_picker(
+    message: Message, state: FSMContext, owner_telegram_id: int
+) -> None:
     await state.clear()
     await state.set_state(DealCreation.seller_id)
-    users = await recent_users(message.from_user.id)
+    users = await recent_users(owner_telegram_id)
     await send_hero(
         message,
         "<b>🤝 Новая OTC-сделка</b>\n\n"
@@ -479,13 +481,13 @@ async def debit(message: Message) -> None:
 
 
 async def begin_deal_creation(message: Message, state: FSMContext) -> None:
-    await show_seller_picker(message, state)
+    await show_seller_picker(message, state, message.from_user.id)
 
 
 @dp.callback_query(F.data == "menu:create")
 async def menu_create(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    await show_seller_picker(callback.message, state)
+    await show_seller_picker(callback.message, state, callback.from_user.id)
 
 
 @dp.callback_query(F.data == "create:search")
@@ -550,6 +552,17 @@ async def create_choose_amount(callback: CallbackQuery, state: FSMContext) -> No
     )
 
 
+@dp.callback_query(F.data == "menu:home")
+async def menu_home(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.answer()
+    await send_hero(
+        callback.message,
+        "<b>🔐 OTC ESCROW</b>\\n\\nВыбери нужный раздел:",
+        reply_markup=main_menu(),
+    )
+
+
 @dp.callback_query(F.data == "menu:balance")
 async def menu_balance(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
@@ -581,16 +594,41 @@ async def menu_topup(callback: CallbackQuery, state: FSMContext) -> None:
         return
     await state.set_state(TopUp.amount)
     await callback.message.answer(
-        "➕ Пополнение баланса через Crypto Bot\n\n"
-        "Введи сумму в USDT (от 1 до 100 000). После оплаты она автоматически "
-        "поступит на твой внутренний баланс.\n\nДля отмены отправь /cancel."
+        "➕ <b>Пополнение баланса</b>\\n\\n"
+        "Выбери готовую сумму или введи свою (от 1 до 100 000 USDT). "
+        "После оплаты Crypto Bot автоматически зачислит её на внутренний баланс.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [ui_button(text="💵 10 USDT", callback_data="topup:quick:10", style="success"),
+             ui_button(text="💵 25 USDT", callback_data="topup:quick:25", style="success")],
+            [ui_button(text="💵 50 USDT", callback_data="topup:quick:50", style="success"),
+             ui_button(text="💵 100 USDT", callback_data="topup:quick:100", style="success")],
+            [ui_button(text="💵 250 USDT", callback_data="topup:quick:250", style="success"),
+             ui_button(text="💵 500 USDT", callback_data="topup:quick:500", style="success")],
+            [ui_button(text="⌨️ Другая сумма", callback_data="topup:custom")],
+            [ui_button(text="✖️ Отмена", callback_data="create:cancel", style="danger")],
+        ]),
     )
 
 
-@dp.message(TopUp.amount)
-async def receive_topup_amount(message: Message, state: FSMContext) -> None:
+@dp.callback_query(F.data == "topup:custom")
+async def topup_custom_amount(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(TopUp.amount)
+    await callback.answer()
+    await callback.message.answer("⌨️ Введи сумму в USDT (от 1 до 100 000).")
+
+
+@dp.callback_query(F.data.startswith("topup:quick:"))
+async def topup_quick_amount(callback: CallbackQuery, state: FSMContext) -> None:
+    raw = callback.data.rsplit(":", 1)[1]
+    await state.set_state(TopUp.amount)
+    await callback.answer()
+    await process_topup_amount(callback.message, state, raw)
+
+
+async def process_topup_amount(message: Message, state: FSMContext, raw_amount: str) -> None:
     try:
-        amount = Decimal((message.text or "").strip().replace(",", "."))
+        amount = Decimal(raw_amount.replace(",", "."))
         if (
             not amount.is_finite()
             or amount < Decimal("1.00")
@@ -603,10 +641,7 @@ async def receive_topup_amount(message: Message, state: FSMContext) -> None:
         return
 
     try:
-        invoice = await create_deposit_invoice(
-            telegram_id=message.from_user.id,
-            amount=amount,
-        )
+        invoice = await create_deposit_invoice(telegram_id=message.chat.id, amount=amount)
     except (aiohttp.ClientError, RuntimeError, SQLAlchemyError) as exc:
         await message.answer("Не удалось создать счёт Crypto Bot. Попробуй позже.")
         logging.getLogger(__name__).warning("Crypto Pay invoice creation failed: %s", exc)
@@ -619,16 +654,23 @@ async def receive_topup_amount(message: Message, state: FSMContext) -> None:
         await message.answer("Crypto Bot не вернул ссылку на оплату. Обратись к администратору.")
         return
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [ui_button(text="💳 Оплатить через Crypto Bot", url=invoice_url)],
+        [ui_button(text="💳 Оплатить через Crypto Bot", url=invoice_url, style="success")],
         [ui_button(text="💰 Проверить баланс", callback_data="menu:balance")],
+        [ui_button(text="🏠 Главное меню", callback_data="menu:home")],
     ])
     await message.answer(
-        f"Счёт на {amount:.2f} USDT создан.\n"
+        f"🧾 <b>Счёт на {amount:.2f} USDT создан</b>\\n\\n"
         "Оплати его по кнопке ниже. После подтверждения Crypto Bot баланс "
-        "зачислится автоматически (обычно в течение нескольких секунд).\n\n"
-        f"Номер счёта: {invoice['invoice_id']}",
+        "зачислится автоматически.\\n"
+        f"Номер счёта: <code>{invoice['invoice_id']}</code>",
+        parse_mode="HTML",
         reply_markup=keyboard,
     )
+
+
+@dp.message(TopUp.amount)
+async def receive_topup_amount(message: Message, state: FSMContext) -> None:
+    await process_topup_amount(message, state, (message.text or "").strip())
 
 
 @dp.callback_query(F.data == "menu:deals")
@@ -797,7 +839,7 @@ async def edit_deal_amount(callback: CallbackQuery, state: FSMContext) -> None:
 @dp.callback_query(F.data == "create:edit_seller", DealCreation.confirm)
 async def edit_deal_seller(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    await show_seller_picker(callback.message, state)
+    await show_seller_picker(callback.message, state, callback.from_user.id)
 
 
 @dp.callback_query(F.data == "create:edit", DealCreation.confirm)
