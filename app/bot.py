@@ -789,7 +789,8 @@ async def render_my_deals(message: Message, telegram_id: int, page: int = 0, *, 
             icon, status, _ = DEAL_STATUS_PRESENTATION.get(
                 deal.status, ("📌", deal.status, "Статус сделки.")
             )
-            title = f"{icon} #{deal.id} · {deal.amount:.2f} USDT · {status}"
+            short_name = re.sub(r"\\s+", " ", deal.description or "").strip() or "Без названия"
+            title = f"{icon} #{deal.id} · {short_name[:22]} · {deal.amount:.2f} USDT"
             rows.append([ui_button(
                 text=title[:60],
                 callback_data=f"mydeal:view:{deal.id}:{page}",
