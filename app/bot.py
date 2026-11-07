@@ -229,6 +229,37 @@ def admin_deal_keyboard(deal_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def deal_card(
+    *,
+    title: str,
+    deal_id: int,
+    buyer: str,
+    seller: str,
+    amount: Decimal,
+    description: str,
+    footer: str,
+    status_emoji: str = "info",
+) -> str:
+    """Consistent, Telegram-rich deal notification layout."""
+    safe_description = html.escape(description.strip() or "Условия не указаны")
+    if len(safe_description) > 1800:
+        safe_description = safe_description[:1797] + "..."
+    return (
+        f"{news_emoji(status_emoji)} <b>{html.escape(title)}</b>\n"
+        f"<b>OTC ESCROW  ·  СДЕЛКА #{deal_id}</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        f"{news_emoji('info')} <b>УЧАСТНИКИ</b>\n"
+        f"🛒 <b>Покупатель</b>\n<code>{html.escape(buyer)}</code>\n"
+        f"📦 <b>Продавец</b>\n<code>{html.escape(seller)}</code>\n\n"
+        f"{news_emoji('money')} <b>СУММА СДЕЛКИ</b>\n"
+        f"<b>{amount:.2f} USDT</b>\n\n"
+        "📝 <b>УСЛОВИЯ</b>\n"
+        f"<blockquote>{safe_description}</blockquote>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"💬 {footer}"
+    )
+
+
 def user_label(user: User) -> str:
     name = re.sub(r"\s+", " ", (user.full_name or "").strip()) or "Без имени"
     username = f"@{user.username}" if user.username else "без username"
@@ -1157,24 +1188,32 @@ async def confirm_deal_creation(callback: CallbackQuery, state: FSMContext) -> N
     await callback.answer("Сделка создана.")
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer(
-        f"✅ <b>Сделка #{deal_id} создана</b>\n\n"
-        f"👤 Покупатель: {html.escape(buyer_name)}\n"
-        f"👤 Продавец: {html.escape(seller_name)}\n"
-        f"💰 Сумма: <b>{amount:.2f} USDT</b>\n"
-        f"📦 Условия: {html.escape(description)}\n\n"
-        "⏳ Ожидаем ответа продавца.",
+        deal_card(
+            title="Сделка успешно создана",
+            deal_id=deal_id,
+            buyer=buyer_name,
+            seller=seller_name,
+            amount=amount,
+            description=description,
+            footer="Ожидаем ответа продавца. Как только он примет предложение, ты получишь уведомление.",
+            status_emoji="check",
+        ),
         parse_mode="HTML",
         reply_markup=main_menu(callback.from_user.id),
     )
     try:
         await callback.bot.send_message(
             int(data["seller_id"]),
-            f"🤝 <b>Вам предложена сделка #{deal_id}</b>\n\n"
-            f"👤 Покупатель: {html.escape(buyer_name)}\n"
-            f"👤 Вы — продавец: {html.escape(seller_name)}\n"
-            f"💰 Сумма: <b>{amount:.2f} USDT</b>\n"
-            f"📦 Условия: {html.escape(description)}\n\n"
-            "Выберите действие:",
+            deal_card(
+                title="Вам предложена новая сделка",
+                deal_id=deal_id,
+                buyer=buyer_name,
+                seller=seller_name,
+                amount=amount,
+                description=description,
+                footer="Проверь данные и выбери действие ниже.",
+                status_emoji="urgent",
+            ),
             parse_mode="HTML",
             reply_markup=deal_keyboard(deal_id, "accept", "cancel"),
         )
@@ -1192,117 +1231,125 @@ async def deal_action(callback: CallbackQuery) -> None:
         deal_id = int(raw_id)
         async with SessionFactory() as session, session.begin():
             if action == "accept":
-                deal = await accept_deal(
-                    session, deal_id=deal_id, actor_telegram_id=callback.from_user.id
-                )
+                deal = await accept_deal(session, deal_id=deal_id, actor_telegram_id=callback.from_user.id)
             elif action == "fund":
-                deal = await fund_deal(
-                    session, deal_id=deal_id, actor_telegram_id=callback.from_user.id
-                )
+                deal = await fund_deal(session, deal_id=deal_id, actor_telegram_id=callback.from_user.id)
             elif action == "delivered":
-                deal = await mark_delivered(
-                    session, deal_id=deal_id, actor_telegram_id=callback.from_user.id
-                )
+                deal = await mark_delivered(session, deal_id=deal_id, actor_telegram_id=callback.from_user.id)
             elif action == "confirm":
-                deal = await confirm_deal(
-                    session, deal_id=deal_id, actor_telegram_id=callback.from_user.id
-                )
+                deal = await confirm_deal(session, deal_id=deal_id, actor_telegram_id=callback.from_user.id)
             elif action == "dispute":
-                deal = await open_dispute(
-                    session, deal_id=deal_id, actor_telegram_id=callback.from_user.id
-                )
+                deal = await open_dispute(session, deal_id=deal_id, actor_telegram_id=callback.from_user.id)
             elif action == "cancel":
-                deal = await cancel_deal(
-                    session, deal_id=deal_id, actor_telegram_id=callback.from_user.id
-                )
+                deal = await cancel_deal(session, deal_id=deal_id, actor_telegram_id=callback.from_user.id)
             else:
                 raise ValueError("Неизвестное действие.")
+
             deal_id = deal.id
             buyer_id, seller_id = await participant_ids(session, deal)
             buyer_name, seller_name = await participant_labels(session, deal)
             deal_amount, deal_description = deal.amount, deal.description
 
-        await callback.answer("Готово.")
+        await callback.answer("Готово! Статус сделки обновлён.")
+        await callback.message.edit_reply_markup(reply_markup=None)
+
         if action == "accept":
-            await callback.message.edit_reply_markup(reply_markup=None)
             await callback.bot.send_message(
                 buyer_id,
-                f"🤝 <b>Продавец принял сделку #{deal_id}</b>\n\n"
-                f"👤 Покупатель: {html.escape(buyer_name)}\n"
-                f"👤 Продавец: {html.escape(seller_name)}\n"
-                f"💰 Сумма: {deal_amount:.2f} USDT\n"
-                f"📦 Условия: {html.escape(deal_description)}\n\n"
-                "Теперь зарезервируйте сумму.",
+                deal_card(
+                    title="Продавец принял предложение",
+                    deal_id=deal_id, buyer=buyer_name, seller=seller_name,
+                    amount=deal_amount, description=deal_description,
+                    footer="Следующий шаг — покупателю зарезервировать сумму сделки.",
+                    status_emoji="check",
+                ),
                 parse_mode="HTML",
                 reply_markup=deal_keyboard(deal_id, "fund", "cancel"),
             )
         elif action == "fund":
-            await callback.message.edit_reply_markup(reply_markup=None)
+            card = deal_card(
+                title="Средства успешно зарезервированы",
+                deal_id=deal_id, buyer=buyer_name, seller=seller_name,
+                amount=deal_amount, description=deal_description,
+                footer="Продавец, выполни обязательства и отметь это кнопкой ниже. Покупатель — дождись подтверждения.",
+                status_emoji="lock",
+            )
             await callback.bot.send_message(
-                seller_id,
-                f"🔒 <b>Средства по сделке #{deal_id} зарезервированы</b>\n\n"
-                f"👤 Покупатель: {html.escape(buyer_name)}\n"
-                f"👤 Продавец: {html.escape(seller_name)}\n"
-                f"💰 Сумма: {deal_amount:.2f} USDT\n"
-                f"📦 Условия: {html.escape(deal_description)}\n\n"
-                "Выполните обязательства и отметьте это кнопкой ниже.",
-                parse_mode="HTML",
+                seller_id, card, parse_mode="HTML",
                 reply_markup=deal_keyboard(deal_id, "delivered", "dispute"),
             )
             await callback.bot.send_message(
                 buyer_id,
-                f"🔒 Сумма по сделке #{deal_id} находится в резерве.\n"
-                f"👤 Продавец: {html.escape(seller_name)}\n"
-                f"💰 {deal_amount:.2f} USDT"
+                f"{news_emoji('lock')} <b>Деньги находятся в резерве</b>\n"
+                f"Сделка <b>#{deal_id}</b>\n\n"
+                f"👤 Продавец: <code>{html.escape(seller_name)}</code>\n"
+                f"💰 Сумма: <b>{deal_amount:.2f} USDT</b>\n\n"
+                "<blockquote>Средства удерживаются до подтверждения выполнения условий сделки.</blockquote>",
+                parse_mode="HTML",
             )
         elif action == "delivered":
-            await callback.message.edit_reply_markup(reply_markup=None)
             await callback.bot.send_message(
                 buyer_id,
-                f"📦 <b>Продавец отметил выполнение сделки #{deal_id}</b>\n\n"
-                f"👤 Продавец: {html.escape(seller_name)}\n"
-                f"💰 Сумма: {deal_amount:.2f} USDT\n"
-                f"📦 Условия: {html.escape(deal_description)}\n\n"
-                "Проверь результат и подтверди получение.",
+                deal_card(
+                    title="Продавец отметил выполнение",
+                    deal_id=deal_id, buyer=buyer_name, seller=seller_name,
+                    amount=deal_amount, description=deal_description,
+                    footer="Проверь товар или услугу. Если всё соответствует условиям — подтверди получение. Если нет — открой спор.",
+                    status_emoji="warning",
+                ),
                 parse_mode="HTML",
                 reply_markup=deal_keyboard(deal_id, "confirm", "dispute"),
             )
         elif action == "confirm":
-            await callback.message.edit_reply_markup(reply_markup=None)
             for telegram_id in {buyer_id, seller_id}:
                 await callback.bot.send_message(
                     telegram_id,
-                    f"✅ <b>Сделка #{deal_id} завершена</b>\n\n"
-                    f"👤 Покупатель: {html.escape(buyer_name)}\n"
-                    f"👤 Продавец: {html.escape(seller_name)}\n"
-                    f"💰 Сумма: {deal_amount:.2f} USDT\n"
-                    "Средства зачислены продавцу.",
+                    deal_card(
+                        title="Сделка успешно завершена!",
+                        deal_id=deal_id, buyer=buyer_name, seller=seller_name,
+                        amount=deal_amount, description=deal_description,
+                        footer="Подтверждение получено. Средства зачислены продавцу. Спасибо, что воспользовались OTC ESCROW!",
+                        status_emoji="check",
+                    ),
                     parse_mode="HTML",
                 )
         elif action in ("dispute", "cancel"):
-            await callback.message.edit_reply_markup(reply_markup=None)
-            status_text = "отправлена на разбор администратору" if action == "dispute" else "отменена"
-            await callback.bot.send_message(
-                buyer_id, f"Сделка #{deal_id} {status_text}."
+            if action == "dispute":
+                title = "По сделке открыт спор"
+                footer = "Администратор получил уведомление и рассмотрит ситуацию."
+                emoji = "warning"
+            else:
+                title = "Сделка отменена"
+                footer = "Операция отменена. Если считаешь это ошибкой, свяжись с поддержкой."
+                emoji = "cancel"
+            card = deal_card(
+                title=title, deal_id=deal_id,
+                buyer=buyer_name, seller=seller_name,
+                amount=deal_amount, description=deal_description,
+                footer=footer, status_emoji=emoji,
             )
-            await callback.bot.send_message(
-                seller_id, f"Сделка #{deal_id} {status_text}."
-            )
+            for telegram_id in {buyer_id, seller_id}:
+                await callback.bot.send_message(telegram_id, card, parse_mode="HTML")
             if action == "dispute":
                 await callback.bot.send_message(
                     settings.superadmin_id,
-                    f"⚠️ <b>Спор по сделке #{deal_id}</b>\n\n"
-                    f"👤 Покупатель: {html.escape(buyer_name)}\n"
-                    f"👤 Продавец: {html.escape(seller_name)}\n"
-                    f"💰 Сумма: {deal_amount:.2f} USDT\n"
-                    f"📦 Условия: {html.escape(deal_description)}\n\n"
-                    "Выберите решение:",
+                    deal_card(
+                        title="Требуется решение администратора",
+                        deal_id=deal_id, buyer=buyer_name, seller=seller_name,
+                        amount=deal_amount, description=deal_description,
+                        footer="Выбери решение по спору. Перед подтверждением проверь переписку и доказательства.",
+                        status_emoji="warning",
+                    ),
                     parse_mode="HTML",
                     reply_markup=admin_deal_keyboard(deal_id),
                 )
     except (ValueError, InvalidOperation) as exc:
         await callback.answer(str(exc), show_alert=True)
     except (SQLAlchemyError, TelegramAPIError):
+        logging.getLogger(__name__).exception(
+            "Deal action failed action=%s deal_id=%s user_id=%s",
+            action, raw_id, callback.from_user.id,
+        )
         await callback.answer("Не удалось выполнить действие. Попробуйте позже.", show_alert=True)
 
 
