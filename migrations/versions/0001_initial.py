@@ -29,6 +29,8 @@ def upgrade() -> None:
         sa.Column("available", sa.Numeric(18, 2), nullable=False, server_default="0"),
         sa.Column("frozen", sa.Numeric(18, 2), nullable=False, server_default="0"),
         sa.Column("currency", sa.String(8), nullable=False, server_default="USDT"),
+        sa.CheckConstraint("available >= 0", name="ck_accounts_available_nonnegative"),
+        sa.CheckConstraint("frozen >= 0", name="ck_accounts_frozen_nonnegative"),
     )
 
     op.create_table(
@@ -41,6 +43,7 @@ def upgrade() -> None:
         sa.Column("status", sa.String(32), nullable=False, server_default="created"),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.CheckConstraint("amount > 0", name="ck_deals_amount_positive"),
     )
     op.create_index("ix_deals_buyer_id", "deals", ["buyer_id"])
     op.create_index("ix_deals_seller_id", "deals", ["seller_id"])
@@ -57,6 +60,7 @@ def upgrade() -> None:
         sa.Column("reason", sa.Text(), nullable=False),
         sa.Column("deal_id", sa.Integer(), sa.ForeignKey("deals.id")),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.CheckConstraint("amount > 0", name="ck_ledger_amount_positive"),
     )
     op.create_index("ix_ledger_entries_account_id", "ledger_entries", ["account_id"])
     op.execute("""
