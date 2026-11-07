@@ -836,7 +836,7 @@ async def my_deals_page(callback: CallbackQuery) -> None:
 @dp.callback_query(F.data.startswith("mydeal:view:"))
 async def my_deal_details(callback: CallbackQuery) -> None:
     try:
-        _, _, _, raw_id, raw_page = callback.data.split(":")
+        _, _, raw_id, raw_page = callback.data.split(":")
         deal_id, page = int(raw_id), int(raw_page)
     except (ValueError, IndexError):
         await callback.answer("Некорректный номер сделки.", show_alert=True)
