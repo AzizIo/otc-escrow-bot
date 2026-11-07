@@ -285,10 +285,7 @@ async def menu_balance(callback: CallbackQuery, state: FSMContext) -> None:
         f"💰 Твой баланс\n\n"
         f"Доступно: {account.available:.2f} {account.currency}\n"
         f"В резерве: {account.frozen:.2f} {account.currency}",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="➕ Пополнить баланс", callback_data="menu:topup")],
-            [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu:help")],
-        ]),
+        reply_markup=main_menu(),
     )
 
 
