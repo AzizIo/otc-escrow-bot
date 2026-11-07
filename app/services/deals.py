@@ -125,23 +125,50 @@ async def confirm_deal(
     if deal.status != DealStatus.DELIVERED:
         raise ValueError("Продавец ещё не отметил выполнение сделки.")
 
-    account = await _locked_account(session, deal.seller_id)
-    if account.frozen < deal.amount:
-        raise ValueError("Ошибка учёта: замороженная сумма продавцу недоступна.")
-    account.frozen -= deal.amount
-    account.available += deal.amount
+    locked_accounts = list(
+        (
+            await session.scalars(
+                select(Account)
+                .where(Account.user_id.in_([deal.buyer_id, deal.seller_id]))
+                .order_by(Account.user_id)
+                .with_for_update()
+            )
+        ).all()
+    )
+    accounts_by_user = {account.user_id: account for account in locked_accounts}
+    buyer_account = accounts_by_user.get(deal.buyer_id)
+    seller_account = accounts_by_user.get(deal.seller_id)
+    if buyer_account is None or seller_account is None:
+        raise ValueError("У одного из участников не создан счёт.")
+    if buyer_account.frozen < deal.amount:
+        raise ValueError("Ошибка учёта: у покупателя недостаточно замороженных средств.")
+
+    buyer_account.frozen -= deal.amount
+    seller_account.available += deal.amount
     deal.status = DealStatus.COMPLETED
-    session.add(
-        LedgerEntry(
-            account_id=account.id,
-            kind="deal_release",
-            amount=deal.amount,
-            available_delta=deal.amount,
-            frozen_delta=-deal.amount,
-            actor_telegram_id=actor_telegram_id,
-            reason=f"Выплата продавцу по сделке #{deal.id}",
-            deal_id=deal.id,
-        )
+    session.add_all(
+        [
+            LedgerEntry(
+                account_id=buyer_account.id,
+                kind="deal_release",
+                amount=deal.amount,
+                available_delta=Decimal("0.00"),
+                frozen_delta=-deal.amount,
+                actor_telegram_id=actor_telegram_id,
+                reason=f"Списание резерва по сделке #{deal.id}",
+                deal_id=deal.id,
+            ),
+            LedgerEntry(
+                account_id=seller_account.id,
+                kind="deal_release",
+                amount=deal.amount,
+                available_delta=deal.amount,
+                frozen_delta=Decimal("0.00"),
+                actor_telegram_id=actor_telegram_id,
+                reason=f"Выплата продавцу по сделке #{deal.id}",
+                deal_id=deal.id,
+            ),
+        ]
     )
     return deal
 
