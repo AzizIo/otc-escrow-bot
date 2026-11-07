@@ -736,64 +736,108 @@ def deal_card_text(deal: Deal, *, role: str, counterparty: str) -> str:
     )
 
 
-@dp.callback_query(F.data == "menu:deals")
-async def menu_deals(callback: CallbackQuery, state: FSMContext) -> None:
-    await state.clear()
-    await callback.answer()
+async def render_my_deals(message: Message, telegram_id: int, page: int = 0, *, edit: bool = False) -> None:
+    page_size = 6
     async with SessionFactory() as session:
-        user = await session.scalar(
-            select(User).where(User.telegram_id == callback.from_user.id)
-        )
+        user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
         if user is None:
-            await callback.message.answer("Сначала отправь /start.")
+            await message.answer("Сначала открой бота командой /start.")
             return
+        total = await session.scalar(
+            select(func.count(Deal.id)).where(
+                or_(Deal.buyer_id == user.id, Deal.seller_id == user.id)
+            )
+        ) or 0
+        pages = max(1, (total + page_size - 1) // page_size)
+        page = max(0, min(page, pages - 1))
         deals = list((await session.scalars(
             select(Deal)
             .where(or_(Deal.buyer_id == user.id, Deal.seller_id == user.id))
             .order_by(Deal.created_at.desc())
-            .limit(10)
+            .offset(page * page_size)
+            .limit(page_size)
         )).all())
-        cards = []
+        counterparties = {}
+        roles = {}
         for deal in deals:
             other_id = deal.seller_id if deal.buyer_id == user.id else deal.buyer_id
             other = await session.get(User, other_id)
-            role = "Покупатель" if deal.buyer_id == user.id else "Продавец"
-            counterparty = user_label(other) if other else f"ID {other_id}"
-            cards.append((deal, role, counterparty))
-    if not cards:
-        await send_hero(
-            callback.message,
-            "📋 <b>МОИ СДЕЛКИ</b>\n\n"
-            "Пока здесь пусто. Создай первую сделку — её статус всегда будет под рукой.",
-            reply_markup=main_menu(callback.from_user.id),
-            photo_url=DEAL_BANNER_URL,
+            counterparties[deal.id] = user_label(other) if other else f"ID {other_id}"
+            roles[deal.id] = "Покупатель" if deal.buyer_id == user.id else "Продавец"
+
+    if not deals:
+        caption = (
+            "📋 <b>МОИ СДЕЛКИ</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            "🗂 История пока пуста.\n"
+            "Создай первую сделку — здесь появится её статус."
         )
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [ui_button(text="🤝 Создать сделку", callback_data="menu:create", style="success")],
+            [ui_button(text="🏠 Главное меню", callback_data="menu:home")],
+        ])
+    else:
+        lines = [
+            "📋 <b>ИСТОРИЯ МОИХ СДЕЛОК</b>",
+            "━━━━━━━━━━━━━━━━━━",
+            f"🗂 Всего сделок: <b>{total}</b>  ·  📄 Страница <b>{page + 1}/{pages}</b>",
+            "",
+            "<i>Нажми на сделку, чтобы открыть полную карточку.</i>",
+        ]
+        rows = []
+        for deal in deals:
+            icon, status, _ = DEAL_STATUS_PRESENTATION.get(
+                deal.status, ("📌", deal.status, "Статус сделки.")
+            )
+            title = f"{icon} #{deal.id} · {deal.amount:.2f} USDT · {status}"
+            rows.append([ui_button(
+                text=title[:60],
+                callback_data=f"mydeal:view:{deal.id}:{page}",
+                style="success" if deal.status == "completed" else "primary",
+            )])
+        nav = []
+        if page > 0:
+            nav.append(ui_button(text="⬅️ Назад", callback_data=f"mydeals:page:{page - 1}"))
+        if page < pages - 1:
+            nav.append(ui_button(text="Вперёд ➡️", callback_data=f"mydeals:page:{page + 1}"))
+        if nav:
+            rows.append(nav)
+        rows.append([ui_button(text="🏠 Главное меню", callback_data="menu:home")])
+        caption = "\n".join(lines)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
+
+    if edit:
+        if message.photo:
+            await message.edit_caption(caption=caption, parse_mode="HTML", reply_markup=keyboard)
+        else:
+            await message.edit_text(caption, parse_mode="HTML", reply_markup=keyboard)
+    else:
+        await send_hero(message, caption, reply_markup=keyboard, photo_url=DEAL_BANNER_URL)
+
+
+@dp.callback_query(F.data == "menu:deals")
+async def menu_deals(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.answer()
+    await render_my_deals(callback.message, callback.from_user.id)
+
+
+@dp.callback_query(F.data.startswith("mydeals:page:"))
+async def my_deals_page(callback: CallbackQuery) -> None:
+    try:
+        page = int(callback.data.rsplit(":", 1)[1])
+    except (ValueError, IndexError):
+        await callback.answer("Некорректная страница.", show_alert=True)
         return
-    await send_hero(
-        callback.message,
-        "📋 <b>МОИ СДЕЛКИ</b>\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        f"🗂 Найдено сделок: <b>{len(cards)}</b>\n\n"
-        "Каждая сделка — отдельная карточка с суммой, участником и статусом.",
-        photo_url=DEAL_BANNER_URL,
-    )
-    for deal, role, counterparty in cards:
-        await callback.message.answer(
-            deal_card_text(deal, role=role, counterparty=counterparty),
-            parse_mode="HTML",
-            reply_markup=deal_card_keyboard(deal.id),
-        )
-    await callback.message.answer(
-        "🏠 <b>Вернуться в главное меню</b>",
-        parse_mode="HTML",
-        reply_markup=main_menu(callback.from_user.id),
-    )
+    await callback.answer()
+    await render_my_deals(callback.message, callback.from_user.id, page, edit=True)
 
 
 @dp.callback_query(F.data.startswith("mydeal:view:"))
 async def my_deal_details(callback: CallbackQuery) -> None:
     try:
-        deal_id = int(callback.data.rsplit(":", 1)[1])
+        _, _, _, raw_id, raw_page = callback.data.split(":")
+        deal_id, page = int(raw_id), int(raw_page)
     except (ValueError, IndexError):
         await callback.answer("Некорректный номер сделки.", show_alert=True)
         return
@@ -803,21 +847,39 @@ async def my_deal_details(callback: CallbackQuery) -> None:
         if user is None or deal is None or user.id not in (deal.buyer_id, deal.seller_id):
             await callback.answer("Сделка не найдена или у вас нет доступа.", show_alert=True)
             return
-        other_id = deal.seller_id if deal.buyer_id == user.id else deal.buyer_id
-        other = await session.get(User, other_id)
+        buyer = await session.get(User, deal.buyer_id)
+        seller = await session.get(User, deal.seller_id)
         role = "Покупатель" if deal.buyer_id == user.id else "Продавец"
-        counterparty = user_label(other) if other else f"ID {other_id}"
-    await callback.answer()
-    await callback.message.answer(
-        "🧾 <b>ПОДРОБНОСТИ СДЕЛКИ</b>\n━━━━━━━━━━━━━━━━━━\n"
-        + deal_card_text(deal, role=role, counterparty=counterparty)
-        + f"\n\n🆔 <b>Внутренний ID:</b> <code>{deal.id}</code>",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [ui_button(text="📋 Все мои сделки", callback_data="menu:deals", style="primary")],
-            [ui_button(text="🏠 Главное меню", callback_data="menu:home", style="primary")],
-        ]),
+        other = seller if deal.buyer_id == user.id else buyer
+        counterparty = user_label(other) if other else "Пользователь не найден"
+    icon, status, hint = DEAL_STATUS_PRESENTATION.get(
+        deal.status, ("📌", deal.status, "Статус сделки.")
     )
+    created = deal.created_at.strftime("%d.%m.%Y · %H:%M UTC") if deal.created_at else "Не указана"
+    caption = (
+        f"🧾 <b>КАРТОЧКА СДЕЛКИ №{deal.id}</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        f"💰 <b>Сумма:</b> {deal.amount:.2f} USDT\n"
+        f"{icon} <b>Статус:</b> {html.escape(status)}\n"
+        f"🧭 <b>Ваша роль:</b> {role}\n"
+        f"👤 <b>Покупатель:</b> {html.escape(user_label(buyer) if buyer else str(deal.buyer_id))}\n"
+        f"🛍 <b>Продавец:</b> {html.escape(user_label(seller) if seller else str(deal.seller_id))}\n"
+        f"🤝 <b>Контрагент:</b> {html.escape(counterparty)}\n"
+        f"🗓 <b>Создана:</b> {created}\n"
+        f"🆔 <b>ID сделки:</b> <code>{deal.id}</code>\n\n"
+        "📦 <b>УСЛОВИЯ СДЕЛКИ</b>\n"
+        f"<blockquote>{html.escape(deal.description)}</blockquote>\n"
+        f"💬 <i>{hint}</i>"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [ui_button(text="⬅️ К списку сделок", callback_data=f"mydeals:page:{page}")],
+        [ui_button(text="🏠 Главное меню", callback_data="menu:home")],
+    ])
+    await callback.answer()
+    if callback.message.photo:
+        await callback.message.edit_caption(caption=caption, parse_mode="HTML", reply_markup=keyboard)
+    else:
+        await callback.message.edit_text(caption, parse_mode="HTML", reply_markup=keyboard)
 
 
 @dp.callback_query(F.data == "menu:help")
