@@ -44,14 +44,13 @@ from app.services.crypto_pay import (
 )
 dp = Dispatcher()
 
-# Shared visual style. Telegram loads the banner from a public CDN.
 BRAND_BANNER_URL = (
     "https://images.unsplash.com/photo-1639762681485-074b7f938ba0"
     "?auto=format&fit=crop&w=1280&h=720&q=85"
 )
 
 # Custom emoji IDs from Telegram's public News Emoji pack.
-# Unicode fallbacks are used automatically when the bot cannot use custom emoji.
+# Unicode fallbacks are used when the bot owner does not have Telegram Premium.
 NEWS_EMOJI_IDS = {
     "urgent": ("5224607267797606837", "⚡"),
     "warning": ("5447644880824181073", "⚠️"),
@@ -106,7 +105,7 @@ async def send_hero(
     caption: str,
     reply_markup: InlineKeyboardMarkup | None = None,
 ) -> None:
-    """Send a branded image header, gracefully falling back to text."""
+    """Send a branded image header, with fallbacks for older accounts/clients."""
     try:
         await message.answer_photo(
             photo=BRAND_BANNER_URL,
@@ -115,8 +114,6 @@ async def send_hero(
             reply_markup=reply_markup,
         )
     except TelegramAPIError:
-        # If the bot owner has no Premium, Telegram rejects custom emoji
-        # entities. Keep the same design with their Unicode fallbacks.
         plain_caption = re.sub(
             r'<tg-emoji emoji-id="\d+">(.*?)</tg-emoji>',
             r'\1',
@@ -248,12 +245,14 @@ async def start(message: Message) -> None:
             .on_conflict_do_nothing(index_elements=[Account.user_id])
         )
 
-    await message.answer(
-        "Добро пожаловать в OTC Escrow 👋\n\n"
-        "Здесь можно безопасно координировать OTC-сделки и отслеживать их этапы.\n"
-        "Баланс — внутренняя учётная запись в условных USDT, не реальные токены "
-        "и не криптокошелёк.\n\n"
-        "Выбери нужное действие:",
+    await send_hero(
+        message,
+        f'<b>{news_emoji("lock")} OTC ESCROW</b>\n\n'
+        "Площадка для координации OTC-сделок: создание предложений, резервирование "
+        "внутреннего баланса и подтверждение выполнения.\n\n"
+        f'{news_emoji("money")} Баланс в USDT — внутренняя единица учёта, не криптокошелёк '
+        "и не on-chain escrow.\n\n"
+        "<b>Выбери действие:</b>",
         reply_markup=main_menu(),
     )
 
@@ -263,13 +262,118 @@ async def show_menu(message: Message, state: FSMContext) -> None:
     await state.clear()
     await send_hero(
         message,
-        f'<b>{news_emoji("lock")} OTC ESCROW</b>\n\n'
-        "Площадка для координации OTC-сделок: создание предложений, резервирование "
-        "внутреннего баланса и подтверждение выполнения.\n\n"
-        "💡 Баланс в USDT — внутренняя единица учёта, не криптокошелёк и не "
-        "on-chain escrow.\n\n"
-        "<b>Выбери действие:</b>",
+        f'<b>{news_emoji("lock")} OTC ESCROW</b>\n\nВыбери действие:',
         reply_markup=main_menu(),
+    )
+
+
+@dp.message(Command("balance"))
+async def balance(message: Message) -> None:
+    async with SessionFactory() as session:
+        account = await session.scalar(
+            select(Account).join(User, User.id == Account.user_id)
+            .where(User.telegram_id == message.from_user.id)
+        )
+        if account is None:
+            await message.answer("Сначала отправь /start.")
+            return
+        await message.answer(
+            f"Доступно: {account.available:.2f} {account.currency}\n"
+            f"В резерве: {account.frozen:.2f} {account.currency}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [ui_button(text="➕ Пополнить баланс", callback_data="menu:topup")]
+            ]),
+        )
+
+
+@dp.message(Command("my_deals"))
+async def my_deals(message: Message) -> None:
+    status_labels = {
+        "awaiting_seller": "Ожидает продавца",
+        "awaiting_funding": "Ожидает резерва",
+        "funded": "Средства в резерве",
+        "delivered": "Ожидает подтверждения",
+        "completed": "Завершена",
+        "cancelled": "Отменена",
+        "disputed": "Спор",
+        "refunded": "Возвращена",
+    }
+    async with SessionFactory() as session:
+        user = await session.scalar(
+            select(User).where(User.telegram_id == message.from_user.id)
+        )
+        if user is None:
+            await message.answer("Сначала отправь /start.")
+            return
+        deals = list(
+            (
+                await session.scalars(
+                    select(Deal)
+                    .where(or_(Deal.buyer_id == user.id, Deal.seller_id == user.id))
+                    .order_by(Deal.created_at.desc())
+                    .limit(10)
+                )
+            ).all()
+        )
+    if not deals:
+        await message.answer("У тебя пока нет сделок.")
+        return
+    lines = ["Последние сделки:"]
+    for deal in deals:
+        role = "Покупатель" if deal.buyer_id == user.id else "Продавец"
+        status = status_labels.get(deal.status, deal.status)
+        lines.append(
+            f"#{deal.id} · {deal.amount:.2f} USDT · {role}\n"
+            f"{status} · {deal.description[:80]}"
+        )
+    await message.answer("\n\n".join(lines))
+
+
+async def _adjust_balance(message: Message, *, credit: bool) -> None:
+    if message.from_user.id != settings.superadmin_id:
+        await message.answer("⛔ Эта команда доступна только администратору.")
+        return
+    parts = (message.text or "").split(maxsplit=3)
+    if len(parts) != 4:
+        action = "credit" if credit else "debit"
+        await message.answer(f"Формат: /{action} TELEGRAM_ID СУММА ПРИЧИНА")
+        return
+    try:
+        target_id = int(parts[1])
+        amount = Decimal(parts[2])
+        if target_id <= 0 or not amount.is_finite() or amount <= 0:
+            raise ValueError("Проверьте Telegram ID и сумму.")
+        async with SessionFactory() as session, session.begin():
+            await admin_adjust(
+                session, target_telegram_id=target_id,
+                actor_telegram_id=message.from_user.id, amount=amount,
+                credit=credit, reason=parts[3],
+            )
+    except (ValueError, InvalidOperation) as exc:
+        await message.answer(f"Не удалось выполнить операцию: {exc}")
+        return
+    verb = "начислено" if credit else "списано"
+    await message.answer(f"✅ {verb.capitalize()} {amount:.2f} USDT пользователю {target_id}.")
+
+
+@dp.message(Command("credit"))
+async def credit(message: Message) -> None:
+    await _adjust_balance(message, credit=True)
+
+
+@dp.message(Command("debit"))
+async def debit(message: Message) -> None:
+    await _adjust_balance(message, credit=False)
+
+
+async def begin_deal_creation(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(DealCreation.seller_id)
+    await message.answer(
+        "🤝 Создание сделки\n\n"
+        "Шаг 1 из 3 — отправь Telegram ID продавца.\n"
+        "Продавец должен предварительно запустить бота через /start.\n\n"
+        "Для отмены отправь /cancel."
     )
 
 
@@ -798,7 +902,7 @@ async def admin_panel_home(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await send_hero(
         callback.message,
-        "<b>⚙️ ADMIN CONTROL</b>\n\nВыбери раздел управления:",
+        f'<b>{news_emoji("stats")} ADMIN CONTROL</b>\n\nВыбери раздел управления:',
         reply_markup=admin_main_keyboard(),
     )
 
@@ -1218,7 +1322,7 @@ async def admin_help(message: Message, state: FSMContext) -> None:
         message,
         f'<b>{news_emoji("stats")} ADMIN CONTROL</b>\n\n'
         "Управление пользователями, балансами, статистикой и настройками платежей.\n\n"
-        f"{news_emoji('check')} Все ручные корректировки фиксируются в журнале администратора.",
+        f'{news_emoji("check")} Все ручные корректировки фиксируются в журнале администратора.',
         reply_markup=admin_main_keyboard(),
     )
 
