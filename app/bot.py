@@ -1,5 +1,5 @@
 from decimal import Decimal, InvalidOperation
-from datetime import date, datetime, time, timezone
+from datetime import UTC, date, datetime, time
 import html
 import logging
 
@@ -1033,9 +1033,9 @@ async def admin_profile_since(message: Message, state: FSMContext) -> None:
     raw = (message.text or "").strip()
     try:
         since = None if raw == "-" else datetime.combine(
-            date.fromisoformat(raw), time.min, tzinfo=timezone.utc
+            date.fromisoformat(raw), time.min, tzinfo=UTC
         )
-        if since and since.date() > datetime.now(timezone.utc).date():
+        if since and since.date() > datetime.now(UTC).date():
             raise ValueError
     except ValueError:
         await message.answer("Введи корректную дату не из будущего: ГГГГ-ММ-ДД, либо '-'.")
