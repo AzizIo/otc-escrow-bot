@@ -702,20 +702,44 @@ async def receive_topup_amount(message: Message, state: FSMContext) -> None:
     await process_topup_amount(message, state, (message.text or "").strip(), message.from_user.id)
 
 
+DEAL_STATUS_PRESENTATION = {
+    "awaiting_seller": ("🕓", "Ожидает продавца", "Предложение отправлено продавцу."),
+    "awaiting_funding": ("💳", "Ожидает резерва", "Продавец принял предложение. Нужен резерв средств."),
+    "funded": ("🔒", "Средства в резерве", "Средства зарезервированы. Продавец может выполнять условия."),
+    "delivered": ("📦", "Ожидает подтверждения", "Продавец отметил выполнение. Проверь результат."),
+    "completed": ("✅", "Успешно завершена", "Сделка завершена."),
+    "cancelled": ("🚫", "Отменена", "Сделка была отменена."),
+    "disputed": ("⚠️", "Открыт спор", "Сделка ожидает решения администратора."),
+    "refunded": ("↩️", "Средства возвращены", "Средства возвращены покупателю."),
+}
+
+
+def deal_card_keyboard(deal_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [ui_button(text="🔎 Подробнее о сделке", callback_data=f"mydeal:view:{deal_id}", style="primary")],
+    ])
+
+
+def deal_card_text(deal: Deal, *, role: str, counterparty: str) -> str:
+    icon, status, hint = DEAL_STATUS_PRESENTATION.get(
+        deal.status, ("📌", deal.status, "Статус сделки.")
+    )
+    return (
+        f"🤝 <b>СДЕЛКА №{deal.id}</b>\\n"
+        f"━━━━━━━━━━━━━━━━━━\\n"
+        f"💰 <b>{deal.amount:.2f} USDT</b>\\n"
+        f"{icon} <b>{html.escape(status)}</b>\\n"
+        f"👤 <b>Ваша роль:</b> {role}\\n"
+        f"🧑‍💻 <b>Контрагент:</b> {html.escape(counterparty)}\\n"
+        f"📦 <b>Условия:</b> {html.escape(deal.description[:180])}\\n\\n"
+        f"💡 <i>{hint}</i>"
+    )
+
+
 @dp.callback_query(F.data == "menu:deals")
 async def menu_deals(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await callback.answer()
-    status_labels = {
-        "awaiting_seller": "Ожидает продавца",
-        "awaiting_funding": "Ожидает резерва",
-        "funded": "Средства в резерве",
-        "delivered": "Ожидает подтверждения",
-        "completed": "Завершена",
-        "cancelled": "Отменена",
-        "disputed": "Спор",
-        "refunded": "Возвращена",
-    }
     async with SessionFactory() as session:
         user = await session.scalar(
             select(User).where(User.telegram_id == callback.from_user.id)
@@ -723,34 +747,77 @@ async def menu_deals(callback: CallbackQuery, state: FSMContext) -> None:
         if user is None:
             await callback.message.answer("Сначала отправь /start.")
             return
-        deals = list(
-            (
-                await session.scalars(
-                    select(Deal)
-                    .where(or_(Deal.buyer_id == user.id, Deal.seller_id == user.id))
-                    .order_by(Deal.created_at.desc())
-                    .limit(10)
-                )
-            ).all()
-        )
-        counterparties = {}
+        deals = list((await session.scalars(
+            select(Deal)
+            .where(or_(Deal.buyer_id == user.id, Deal.seller_id == user.id))
+            .order_by(Deal.created_at.desc())
+            .limit(10)
+        )).all())
+        cards = []
         for deal in deals:
             other_id = deal.seller_id if deal.buyer_id == user.id else deal.buyer_id
             other = await session.get(User, other_id)
-            counterparties[deal.id] = user_label(other) if other else str(other_id)
-    if not deals:
-        await callback.message.answer("У тебя пока нет сделок.", reply_markup=main_menu(callback.from_user.id))
-        return
-    lines = ["📋 <b>Последние сделки</b>"]
-    for deal in deals:
-        role = "Покупатель" if deal.buyer_id == user.id else "Продавец"
-        lines.append(
-            f"🤝 <b>#{deal.id}</b> · {deal.amount:.2f} USDT · {role}\n"
-            f"👤 Контрагент: {html.escape(counterparties[deal.id])}\n"
-            f"📌 {status_labels.get(deal.status, deal.status)}\n"
-            f"📦 {html.escape(deal.description[:80])}"
+            role = "Покупатель" if deal.buyer_id == user.id else "Продавец"
+            counterparty = user_label(other) if other else f"ID {other_id}"
+            cards.append((deal, role, counterparty))
+    if not cards:
+        await send_hero(
+            callback.message,
+            "📋 <b>МОИ СДЕЛКИ</b>\\n\\n"
+            "Пока здесь пусто. Создай первую сделку — её статус всегда будет под рукой.",
+            reply_markup=main_menu(callback.from_user.id),
+            photo_url=DEAL_BANNER_URL,
         )
-    await callback.message.answer("\n\n".join(lines), reply_markup=main_menu(callback.from_user.id))
+        return
+    await send_hero(
+        callback.message,
+        "📋 <b>МОИ СДЕЛКИ</b>\\n"
+        "━━━━━━━━━━━━━━━━━━\\n"
+        f"🗂 Найдено сделок: <b>{len(cards)}</b>\\n\\n"
+        "Каждая сделка — отдельная карточка с суммой, участником и статусом.",
+        photo_url=DEAL_BANNER_URL,
+    )
+    for deal, role, counterparty in cards:
+        await callback.message.answer(
+            deal_card_text(deal, role=role, counterparty=counterparty),
+            parse_mode="HTML",
+            reply_markup=deal_card_keyboard(deal.id),
+        )
+    await callback.message.answer(
+        "🏠 <b>Вернуться в главное меню</b>",
+        parse_mode="HTML",
+        reply_markup=main_menu(callback.from_user.id),
+    )
+
+
+@dp.callback_query(F.data.startswith("mydeal:view:"))
+async def my_deal_details(callback: CallbackQuery) -> None:
+    try:
+        deal_id = int(callback.data.rsplit(":", 1)[1])
+    except (ValueError, IndexError):
+        await callback.answer("Некорректный номер сделки.", show_alert=True)
+        return
+    async with SessionFactory() as session:
+        user = await session.scalar(select(User).where(User.telegram_id == callback.from_user.id))
+        deal = await session.get(Deal, deal_id)
+        if user is None or deal is None or user.id not in (deal.buyer_id, deal.seller_id):
+            await callback.answer("Сделка не найдена или у вас нет доступа.", show_alert=True)
+            return
+        other_id = deal.seller_id if deal.buyer_id == user.id else deal.buyer_id
+        other = await session.get(User, other_id)
+        role = "Покупатель" if deal.buyer_id == user.id else "Продавец"
+        counterparty = user_label(other) if other else f"ID {other_id}"
+    await callback.answer()
+    await callback.message.answer(
+        "🧾 <b>ПОДРОБНОСТИ СДЕЛКИ</b>\\n━━━━━━━━━━━━━━━━━━\\n"
+        + deal_card_text(deal, role=role, counterparty=counterparty)
+        + f"\\n\\n🆔 <b>Внутренний ID:</b> <code>{deal.id}</code>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [ui_button(text="📋 Все мои сделки", callback_data="menu:deals", style="primary")],
+            [ui_button(text="🏠 Главное меню", callback_data="menu:home", style="primary")],
+        ]),
+    )
 
 
 @dp.callback_query(F.data == "menu:help")
