@@ -34,7 +34,7 @@ from app.services.deals import (
     open_dispute,
 )
 from app.services.ledger import admin_adjust
-from app.services.crypto_pay import create_deposit_invoice
+from app.services.crypto_pay import (\n    create_deposit_invoice,\n    delete_crypto_pay_token,\n    get_crypto_pay_token,\n    has_crypto_pay_token,\n    save_crypto_pay_token,\n    validate_crypto_pay_token,\n)
 
 dp = Dispatcher()
 
@@ -794,6 +794,102 @@ async def admin_panel_home(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await callback.message.answer(
         "🛠 Панель администратора\nВыбери действие:",
+        reply_markup=admin_main_keyboard(),
+    )
+
+
+@dp.callback_query(F.data == "adminpanel:cryptopay")
+async def admin_crypto_pay_settings(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user.id != settings.superadmin_id:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    await state.clear()
+    configured = await has_crypto_pay_token()
+    status = "🟢 Подключён" if configured else "🔴 Не настроен"
+    keyboard = [
+        [InlineKeyboardButton(
+            text="🔑 Добавить / заменить токен",
+            callback_data="admincryptopay:set",
+        )],
+    ]
+    if configured:
+        keyboard.append([InlineKeyboardButton(
+            text="🗑 Отключить Crypto Pay",
+            callback_data="admincryptopay:remove",
+        )])
+    keyboard.append([InlineKeyboardButton(
+        text="⬅️ Админ-панель", callback_data="adminpanel:home"
+    )])
+    await callback.answer()
+    await callback.message.answer(
+        f"⚙️ Настройки Crypto Pay\n\nСтатус: {status}\n"
+        "Токен хранится в базе данных и не показывается в сообщениях или панели.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
+    )
+
+
+@dp.callback_query(F.data == "admincryptopay:set")
+async def admin_crypto_pay_set_start(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user.id != settings.superadmin_id:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    await state.clear()
+    await state.set_state(CryptoPayAdmin.token)
+    await callback.answer()
+    await callback.message.answer(
+        "Отправь API Token от Crypto Pay одним сообщением.\n"
+        "Бот проверит токен и сохранит его в базе. Сообщение с токеном будет удалено.\n\n"
+        "Получить токен можно в @CryptoBot → Crypto Pay → My Apps.\n"
+        "Для отмены отправь /cancel."
+    )
+
+
+@dp.callback_query(F.data == "admincryptopay:remove")
+async def admin_crypto_pay_remove(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user.id != settings.superadmin_id:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    await state.clear()
+    await delete_crypto_pay_token()
+    await callback.answer("Crypto Pay отключён.")
+    await callback.message.answer(
+        "✅ Токен удалён из базы. Новые пополнения отключены.",
+        reply_markup=admin_main_keyboard(),
+    )
+
+
+@dp.message(CryptoPayAdmin.token)
+async def admin_crypto_pay_receive_token(message: Message, state: FSMContext) -> None:
+    if message.from_user.id != settings.superadmin_id or message.chat.type != "private":
+        await state.clear()
+        return
+
+    token = (message.text or "").strip()
+    try:
+        await message.delete()
+    except TelegramAPIError:
+        logging.getLogger(__name__).warning(
+            "Could not delete the administrator's Crypto Pay token message"
+        )
+
+    if not token or len(token) > 512 or any(char.isspace() for char in token):
+        await message.answer("Токен выглядит некорректно. Отправь его одним сообщением ещё раз.")
+        return
+
+    try:
+        await validate_crypto_pay_token(token)
+        await save_crypto_pay_token(token)
+    except (aiohttp.ClientError, RuntimeError, SQLAlchemyError):
+        await message.answer(
+            "❌ Не удалось проверить токен. Проверь его в Crypto Pay и попробуй ещё раз. "
+            "Старый токен, если он был, не изменён."
+        )
+        return
+
+    await state.clear()
+    await message.answer(
+        "✅ Crypto Pay успешно подключён. Токен проверен и сохранён. "
+        "Пополнения снова доступны.",
         reply_markup=admin_main_keyboard(),
     )
 
