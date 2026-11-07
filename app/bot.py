@@ -171,18 +171,21 @@ class DealCreation(StatesGroup):
     confirm = State()
 
 
-def main_menu() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [ui_button(text="🤝 Создать сделку", callback_data="menu:create")],
-            [
-                ui_button(text="💰 Мой баланс", callback_data="menu:balance"),
-                ui_button(text="📋 Мои сделки", callback_data="menu:deals"),
-            ],
-            [ui_button(text="➕ Пополнить баланс", callback_data="menu:topup")],
-            [ui_button(text="ℹ️ Помощь", callback_data="menu:help")],
-        ]
-    )
+def main_menu(user_id: int | None = None) -> InlineKeyboardMarkup:
+    rows = [
+        [ui_button(text="🤝 Создать сделку", callback_data="menu:create", style="success")],
+        [
+            ui_button(text="💰 Мой баланс", callback_data="menu:balance"),
+            ui_button(text="📋 Мои сделки", callback_data="menu:deals"),
+        ],
+        [ui_button(text="➕ Пополнить баланс", callback_data="menu:topup", style="primary")],
+        [ui_button(text="ℹ️ Помощь", callback_data="menu:help")],
+    ]
+    if user_id == settings.superadmin_id:
+        rows.append([
+            ui_button(text="🛠 Панель администратора", callback_data="adminpanel:home", style="primary")
+        ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def deal_creation_keyboard() -> InlineKeyboardMarkup:
@@ -378,7 +381,7 @@ async def start(message: Message) -> None:
         f'{news_emoji("money")} Баланс в USDT — внутренняя единица учёта, не криптокошелёк '
         "и не on-chain escrow.\n\n"
         "<b>Выбери действие:</b>",
-        reply_markup=main_menu(),
+        reply_markup=main_menu(message.from_user.id),
     )
 
 
@@ -388,7 +391,7 @@ async def show_menu(message: Message, state: FSMContext) -> None:
     await send_hero(
         message,
         f'<b>{news_emoji("lock")} OTC ESCROW</b>\n\nВыбери действие:',
-        reply_markup=main_menu(),
+        reply_markup=main_menu(message.from_user.id),
     )
 
 
@@ -576,7 +579,7 @@ async def menu_home(callback: CallbackQuery, state: FSMContext) -> None:
     await send_hero(
         callback.message,
         "<b>🔐 OTC ESCROW</b>\n\nВыбери нужный раздел:",
-        reply_markup=main_menu(),
+        reply_markup=main_menu(callback.from_user.id),
     )
 
 
@@ -596,7 +599,7 @@ async def menu_balance(callback: CallbackQuery, state: FSMContext) -> None:
         f"💰 Твой баланс\n\n"
         f"Доступно: {account.available:.2f} {account.currency}\n"
         f"В резерве: {account.frozen:.2f} {account.currency}",
-        reply_markup=main_menu(),
+        reply_markup=main_menu(callback.from_user.id),
     )
 
 
@@ -632,7 +635,7 @@ async def menu_topup(callback: CallbackQuery, state: FSMContext) -> None:
 async def topup_cancel(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await callback.answer("Пополнение отменено.")
-    await callback.message.answer("Операция пополнения отменена.", reply_markup=main_menu())
+    await callback.message.answer("Операция пополнения отменена.", reply_markup=main_menu(callback.from_user.id))
 
 
 @dp.callback_query(F.data == "topup:custom")
@@ -736,7 +739,7 @@ async def menu_deals(callback: CallbackQuery, state: FSMContext) -> None:
             other = await session.get(User, other_id)
             counterparties[deal.id] = user_label(other) if other else str(other_id)
     if not deals:
-        await callback.message.answer("У тебя пока нет сделок.", reply_markup=main_menu())
+        await callback.message.answer("У тебя пока нет сделок.", reply_markup=main_menu(callback.from_user.id))
         return
     lines = ["📋 <b>Последние сделки</b>"]
     for deal in deals:
@@ -747,7 +750,7 @@ async def menu_deals(callback: CallbackQuery, state: FSMContext) -> None:
             f"📌 {status_labels.get(deal.status, deal.status)}\n"
             f"📦 {html.escape(deal.description[:80])}"
         )
-    await callback.message.answer("\n\n".join(lines), reply_markup=main_menu())
+    await callback.message.answer("\n\n".join(lines), reply_markup=main_menu(callback.from_user.id))
 
 
 @dp.callback_query(F.data == "menu:help")
@@ -764,7 +767,7 @@ async def menu_help(callback: CallbackQuery, state: FSMContext) -> None:
         "6. Сумма зачисляется продавцу.\n\n"
         "Если возникла проблема после резервирования, можно открыть спор.\n\n"
         "Важно: баланс в USDT — внутренняя единица учёта, не реальные криптоактивы.",
-        reply_markup=main_menu(),
+        reply_markup=main_menu(callback.from_user.id),
     )
 
 
@@ -772,10 +775,10 @@ async def menu_help(callback: CallbackQuery, state: FSMContext) -> None:
 async def cancel_creation(message: Message, state: FSMContext) -> None:
     current = await state.get_state()
     if current is None:
-        await message.answer("Сейчас нечего отменять.", reply_markup=main_menu())
+        await message.answer("Сейчас нечего отменять.", reply_markup=main_menu(message.from_user.id))
         return
     await state.clear()
-    await message.answer("Создание сделки отменено.", reply_markup=main_menu())
+    await message.answer("Создание сделки отменено.", reply_markup=main_menu(message.from_user.id))
 
 
 @dp.message(Command("deal"))
@@ -887,7 +890,7 @@ async def cancel_deal_creation_callback(callback: CallbackQuery, state: FSMConte
     await state.clear()
     await callback.answer("Создание отменено.")
     await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer("Создание сделки отменено.", reply_markup=main_menu())
+    await callback.message.answer("Создание сделки отменено.", reply_markup=main_menu(callback.from_user.id))
 
 
 @dp.callback_query(F.data == "create:confirm", DealCreation.confirm)
@@ -927,7 +930,7 @@ async def confirm_deal_creation(callback: CallbackQuery, state: FSMContext) -> N
         f"📦 Условия: {html.escape(description)}\n\n"
         "⏳ Ожидаем ответа продавца.",
         parse_mode="HTML",
-        reply_markup=main_menu(),
+        reply_markup=main_menu(callback.from_user.id),
     )
     try:
         await callback.bot.send_message(
