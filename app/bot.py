@@ -2,6 +2,7 @@ from decimal import Decimal, InvalidOperation
 from datetime import UTC, date, datetime, time
 import html
 import logging
+import re
 
 import aiohttp
 
@@ -48,6 +49,24 @@ BRAND_BANNER_URL = (
     "https://images.unsplash.com/photo-1639762681485-074b7f938ba0"
     "?auto=format&fit=crop&w=1280&h=720&q=85"
 )
+
+# Custom emoji IDs from Telegram's public News Emoji pack.
+# Unicode fallbacks are used automatically when the bot cannot use custom emoji.
+NEWS_EMOJI_IDS = {
+    "urgent": ("5224607267797606837", "⚡"),
+    "warning": ("5447644880824181073", "⚠️"),
+    "check": ("5206607081334906820", "✅"),
+    "money": ("5409048419211682843", "💵"),
+    "lock": ("5296369303661067030", "🔒"),
+    "stats": ("5231200819986047254", "📊"),
+    "info": ("5323442290708985472", "ℹ️"),
+    "cancel": ("5240241223632954241", "❌"),
+}
+
+
+def news_emoji(name: str) -> str:
+    emoji_id, fallback = NEWS_EMOJI_IDS[name]
+    return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
 
 
 def ui_button(
@@ -96,10 +115,29 @@ async def send_hero(
             reply_markup=reply_markup,
         )
     except TelegramAPIError:
-        logging.getLogger(__name__).warning(
-            "Could not load the branded banner; falling back to text."
+        # If the bot owner has no Premium, Telegram rejects custom emoji
+        # entities. Keep the same design with their Unicode fallbacks.
+        plain_caption = re.sub(
+            r'<tg-emoji emoji-id="\d+">(.*?)</tg-emoji>',
+            r'\1',
+            caption,
         )
-        await message.answer(caption, parse_mode="HTML", reply_markup=reply_markup)
+        try:
+            await message.answer_photo(
+                photo=BRAND_BANNER_URL,
+                caption=plain_caption,
+                parse_mode="HTML",
+                reply_markup=reply_markup,
+            )
+        except TelegramAPIError:
+            logging.getLogger(__name__).warning(
+                "Could not load the branded banner; falling back to text."
+            )
+            await message.answer(
+                plain_caption,
+                parse_mode="HTML",
+                reply_markup=reply_markup,
+            )
 
 
 class TopUp(StatesGroup):
@@ -225,7 +263,7 @@ async def show_menu(message: Message, state: FSMContext) -> None:
     await state.clear()
     await send_hero(
         message,
-        "<b>🛡 OTC ESCROW</b>\n\n"
+        f'<b>{news_emoji("lock")} OTC ESCROW</b>\n\n'
         "Площадка для координации OTC-сделок: создание предложений, резервирование "
         "внутреннего баланса и подтверждение выполнения.\n\n"
         "💡 Баланс в USDT — внутренняя единица учёта, не криптокошелёк и не "
@@ -1178,9 +1216,9 @@ async def admin_help(message: Message, state: FSMContext) -> None:
     await state.clear()
     await send_hero(
         message,
-        "<b>⚙️ ADMIN CONTROL</b>\n\n"
+        f'<b>{news_emoji("stats")} ADMIN CONTROL</b>\n\n'
         "Управление пользователями, балансами, статистикой и настройками платежей.\n\n"
-        "🧾 Все ручные корректировки фиксируются в журнале администратора.",
+        f"{news_emoji('check')} Все ручные корректировки фиксируются в журнале администратора.",
         reply_markup=admin_main_keyboard(),
     )
 
