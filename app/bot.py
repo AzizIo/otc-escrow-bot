@@ -375,7 +375,7 @@ async def receive_deal_amount(message: Message, state: FSMContext) -> None:
         amount = Decimal((message.text or "").strip().replace(",", "."))
         if not amount.is_finite() or amount <= 0 or amount.as_tuple().exponent < -2:
             raise ValueError
-        if amount >= Decimal("10000000000000000"):
+        if amount.adjusted() >= 16:
             raise ValueError
     except (InvalidOperation, ValueError):
         await message.answer("Введи корректную сумму больше нуля, максимум 2 знака после запятой.")
