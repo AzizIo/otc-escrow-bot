@@ -18,11 +18,7 @@ async def configure_commands(bot: Bot) -> None:
     ]
     await bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
     admin_commands = user_commands + [
-        BotCommand(command="admin", description="Панель администратора"),
-        BotCommand(command="credit", description="Начислить внутренний баланс"),
-        BotCommand(command="debit", description="Списать внутренний баланс"),
-        BotCommand(command="resolve_release", description="Выплатить продавцу по сделке"),
-        BotCommand(command="resolve_refund", description="Вернуть покупателю по сделке"),
+        BotCommand(command="admin", description="Открыть панель администратора"),
     ]
     await bot.set_my_commands(
         admin_commands,
