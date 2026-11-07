@@ -11,14 +11,10 @@ from app.services.crypto_pay import poll_crypto_pay_invoices
 
 
 async def configure_commands(bot: Bot) -> None:
+    # All routine actions are available from inline buttons; commands remain as shortcuts.
     user_commands = [
-        BotCommand(command="start", description="Регистрация и главное меню"),
+        BotCommand(command="start", description="Запустить бота и открыть меню"),
         BotCommand(command="menu", description="Открыть главное меню"),
-        BotCommand(command="cancel", description="Отменить текущее действие"),
-        BotCommand(command="balance", description="Мой внутренний баланс"),
-        BotCommand(command="deal", description="Создать сделку"),
-        BotCommand(command="my_deals", description="Мои последние сделки"),
-        BotCommand(command="help", description="Как пользоваться ботом"),
     ]
     await bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
     admin_commands = user_commands + [
