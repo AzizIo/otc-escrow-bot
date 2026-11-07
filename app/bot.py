@@ -74,7 +74,7 @@ def ui_button(
             style = "success"
         else:
             style = "primary"
-    return Telegramui_button(
+    return TelegramInlineKeyboardButton(
         text=text,
         callback_data=callback_data,
         url=url,
@@ -225,11 +225,11 @@ async def show_menu(message: Message, state: FSMContext) -> None:
     await state.clear()
     await send_hero(
         message,
-        "<b>🛡 OTC ESCROW</b>\\n\\n"
+        "<b>🛡 OTC ESCROW</b>\n\n"
         "Площадка для координации OTC-сделок: создание предложений, резервирование "
-        "внутреннего баланса и подтверждение выполнения.\\n\\n"
+        "внутреннего баланса и подтверждение выполнения.\n\n"
         "💡 Баланс в USDT — внутренняя единица учёта, не криптокошелёк и не "
-        "on-chain escrow.\\n\\n"
+        "on-chain escrow.\n\n"
         "<b>Выбери действие:</b>",
         reply_markup=main_menu(),
     )
@@ -760,7 +760,7 @@ async def admin_panel_home(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await send_hero(
         callback.message,
-        "<b>⚙️ ADMIN CONTROL</b>\\n\\nВыбери раздел управления:",
+        "<b>⚙️ ADMIN CONTROL</b>\n\nВыбери раздел управления:",
         reply_markup=admin_main_keyboard(),
     )
 
@@ -1173,10 +1173,13 @@ async def admin_profile_reason(message: Message, state: FSMContext) -> None:
 @dp.message(Command("admin"))
 async def admin_help(message: Message, state: FSMContext) -> None:
     if message.from_user.id != settings.superadmin_id:
-        await send_hero(
+        await message.answer("⛔ Нет доступа.")
+        return
+    await state.clear()
+    await send_hero(
         message,
-        "<b>⚙️ ADMIN CONTROL</b>\\n\\n"
-        "Управление пользователями, балансами, статистикой и настройками платежей.\\n\\n"
+        "<b>⚙️ ADMIN CONTROL</b>\n\n"
+        "Управление пользователями, балансами, статистикой и настройками платежей.\n\n"
         "🧾 Все ручные корректировки фиксируются в журнале администратора.",
         reply_markup=admin_main_keyboard(),
     )
