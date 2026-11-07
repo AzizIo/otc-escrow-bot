@@ -60,11 +60,11 @@ def upgrade() -> None:
     )
     op.create_index("ix_ledger_entries_account_id", "ledger_entries", ["account_id"])
     op.execute("""
-        CREATE FUNCTION prevent_ledger_mutation() RETURNS trigger AS $
-        BEGIN
-            RAISE EXCEPTION 'ledger_entries are append-only';
-        END;
-        $ LANGUAGE plpgsql;
+        CREATE FUNCTION prevent_ledger_mutation() RETURNS trigger
+        LANGUAGE plpgsql
+        AS 'BEGIN
+            RAISE EXCEPTION ''ledger_entries are append-only'';
+        END;';
     """)
     op.execute("""
         CREATE TRIGGER ledger_entries_immutable
