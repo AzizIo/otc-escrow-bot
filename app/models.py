@@ -18,7 +18,9 @@ class UserRole(StrEnum):
 class DealStatus(StrEnum):
     CREATED = "created"
     AWAITING_SELLER = "awaiting_seller"
+    AWAITING_FUNDING = "awaiting_funding"
     FUNDED = "funded"
+    DELIVERED = "delivered"
     COMPLETED = "completed"
     CANCELLED = "cancelled"
     DISPUTED = "disputed"
