@@ -1,4 +1,5 @@
 from decimal import Decimal, InvalidOperation
+import logging
 
 import aiohttp
 
