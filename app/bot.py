@@ -757,23 +757,32 @@ async def menu_topup(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     if not await has_crypto_pay_token():
         await callback.message.answer(
-            "Пополнение пока не подключено. Администратор ещё не настроил Crypto Pay."
+            f"{news_emoji('warning')} <b>ПОПОЛНЕНИЕ ВРЕМЕННО НЕДОСТУПНО</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            "Администратор ещё не подключил Crypto Pay. Попробуй позже или обратись в поддержку.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [ui_button(text="💰 Мой баланс", callback_data="menu:balance")],
+                [ui_button(text="🏠 Главное меню", callback_data="menu:home")],
+            ]),
         )
         return
     await state.set_state(TopUp.amount)
     await callback.message.answer(
-        "➕ <b>Пополнение баланса</b>\n\n"
-        "Выбери готовую сумму или введи свою (от 1 до 100 000 USDT). "
-        "После оплаты Crypto Bot автоматически зачислит её на внутренний баланс.",
+        f"{news_emoji('money')} <b>ПОПОЛНЕНИЕ БАЛАНСА</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "Выбери сумму пополнения:\n"
+        "<i>Счёт будет создан через Crypto Bot. После подтверждения оплаты средства автоматически отобразятся на внутреннем балансе.</i>\n\n"
+        "💵 <b>Быстрые варианты</b>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [ui_button(text="💵 10 USDT", callback_data="topup:quick:10", style="success"),
              ui_button(text="💵 25 USDT", callback_data="topup:quick:25", style="success")],
             [ui_button(text="💵 50 USDT", callback_data="topup:quick:50", style="success"),
              ui_button(text="💵 100 USDT", callback_data="topup:quick:100", style="success")],
-            [ui_button(text="💵 250 USDT", callback_data="topup:quick:250", style="success"),
-             ui_button(text="💵 500 USDT", callback_data="topup:quick:500", style="success")],
-            [ui_button(text="⌨️ Другая сумма", callback_data="topup:custom")],
+            [ui_button(text="💎 250 USDT", callback_data="topup:quick:250", style="success"),
+             ui_button(text="💎 500 USDT", callback_data="topup:quick:500", style="success")],
+            [ui_button(text="✏️ Другая сумма", callback_data="topup:custom")],
             [ui_button(text="✖️ Отмена", callback_data="topup:cancel", style="danger")],
         ]),
     )
@@ -836,10 +845,11 @@ async def process_topup_amount(
         [ui_button(text="🏠 Главное меню", callback_data="menu:home")],
     ])
     await message.answer(
-        f"🧾 <b>Счёт на {amount:.2f} USDT создан</b>\n\n"
-        "Оплати его по кнопке ниже. После подтверждения Crypto Bot баланс "
-        "зачислится автоматически.\n"
-        f"Номер счёта: <code>{invoice['invoice_id']}</code>",
+        f"{news_emoji('check')} <b>СЧЁТ НА {amount:.2f} USDT СОЗДАН</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "💳 Нажми кнопку оплаты ниже и заверши платёж в Crypto Bot.\n\n"
+        "<blockquote>После подтверждения оплаты Crypto Bot автоматически зачислит сумму на твой внутренний баланс.</blockquote>\n"
+        f"🧾 <b>Номер счёта:</b> <code>{invoice['invoice_id']}</code>",
         parse_mode="HTML",
         reply_markup=keyboard,
     )
