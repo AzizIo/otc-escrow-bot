@@ -442,9 +442,9 @@ async def my_deals(message: Message) -> None:
         role = "Покупатель" if deal.buyer_id == user.id else "Продавец"
         status = status_labels.get(deal.status, deal.status)
         lines.append(
-            f"🤝 <b>#{deal.id}</b> · {deal.amount:.2f} USDT · {role}\\n"
-            f"👤 Контрагент: {html.escape(counterparties[deal.id])}\\n"
-            f"📌 {status}\\n📦 {html.escape(deal.description[:80])}"
+            f"🤝 <b>#{deal.id}</b> · {deal.amount:.2f} USDT · {role}\n"
+            f"👤 Контрагент: {html.escape(counterparties[deal.id])}\n"
+            f"📌 {status}\n📦 {html.escape(deal.description[:80])}"
         )
     await message.answer("\n\n".join(lines))
 
@@ -731,9 +731,9 @@ async def menu_deals(callback: CallbackQuery, state: FSMContext) -> None:
     for deal in deals:
         role = "Покупатель" if deal.buyer_id == user.id else "Продавец"
         lines.append(
-            f"🤝 <b>#{deal.id}</b> · {deal.amount:.2f} USDT · {role}\\n"
-            f"👤 Контрагент: {html.escape(counterparties[deal.id])}\\n"
-            f"📌 {status_labels.get(deal.status, deal.status)}\\n"
+            f"🤝 <b>#{deal.id}</b> · {deal.amount:.2f} USDT · {role}\n"
+            f"👤 Контрагент: {html.escape(counterparties[deal.id])}\n"
+            f"📌 {status_labels.get(deal.status, deal.status)}\n"
             f"📦 {html.escape(deal.description[:80])}"
         )
     await callback.message.answer("\n\n".join(lines), reply_markup=main_menu())
@@ -1043,11 +1043,11 @@ async def deal_action(callback: CallbackQuery) -> None:
             if action == "dispute":
                 await callback.bot.send_message(
                     settings.superadmin_id,
-                    f"⚠️ <b>Спор по сделке #{deal_id}</b>\\n\\n"
-                    f"👤 Покупатель: {html.escape(buyer_name)}\\n"
-                    f"👤 Продавец: {html.escape(seller_name)}\\n"
-                    f"💰 Сумма: {deal_amount:.2f} USDT\\n"
-                    f"📦 Условия: {html.escape(deal_description)}\\n\\n"
+                    f"⚠️ <b>Спор по сделке #{deal_id}</b>\n\n"
+                    f"👤 Покупатель: {html.escape(buyer_name)}\n"
+                    f"👤 Продавец: {html.escape(seller_name)}\n"
+                    f"💰 Сумма: {deal_amount:.2f} USDT\n"
+                    f"📦 Условия: {html.escape(deal_description)}\n\n"
                     "Выберите решение:",
                     parse_mode="HTML",
                     reply_markup=admin_deal_keyboard(deal_id),
