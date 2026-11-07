@@ -606,9 +606,16 @@ async def menu_topup(callback: CallbackQuery, state: FSMContext) -> None:
             [ui_button(text="💵 250 USDT", callback_data="topup:quick:250", style="success"),
              ui_button(text="💵 500 USDT", callback_data="topup:quick:500", style="success")],
             [ui_button(text="⌨️ Другая сумма", callback_data="topup:custom")],
-            [ui_button(text="✖️ Отмена", callback_data="create:cancel", style="danger")],
+            [ui_button(text="✖️ Отмена", callback_data="topup:cancel", style="danger")],
         ]),
     )
+
+
+@dp.callback_query(F.data == "topup:cancel")
+async def topup_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.answer("Пополнение отменено.")
+    await callback.message.answer("Операция пополнения отменена.", reply_markup=main_menu())
 
 
 @dp.callback_query(F.data == "topup:custom")
@@ -623,10 +630,12 @@ async def topup_quick_amount(callback: CallbackQuery, state: FSMContext) -> None
     raw = callback.data.rsplit(":", 1)[1]
     await state.set_state(TopUp.amount)
     await callback.answer()
-    await process_topup_amount(callback.message, state, raw)
+    await process_topup_amount(callback.message, state, raw, callback.from_user.id)
 
 
-async def process_topup_amount(message: Message, state: FSMContext, raw_amount: str) -> None:
+async def process_topup_amount(
+    message: Message, state: FSMContext, raw_amount: str, telegram_id: int
+) -> None:
     try:
         amount = Decimal(raw_amount.replace(",", "."))
         if (
@@ -641,7 +650,7 @@ async def process_topup_amount(message: Message, state: FSMContext, raw_amount: 
         return
 
     try:
-        invoice = await create_deposit_invoice(telegram_id=message.chat.id, amount=amount)
+        invoice = await create_deposit_invoice(telegram_id=telegram_id, amount=amount)
     except (aiohttp.ClientError, RuntimeError, SQLAlchemyError) as exc:
         await message.answer("Не удалось создать счёт Crypto Bot. Попробуй позже.")
         logging.getLogger(__name__).warning("Crypto Pay invoice creation failed: %s", exc)
@@ -670,7 +679,7 @@ async def process_topup_amount(message: Message, state: FSMContext, raw_amount: 
 
 @dp.message(TopUp.amount)
 async def receive_topup_amount(message: Message, state: FSMContext) -> None:
-    await process_topup_amount(message, state, (message.text or "").strip())
+    await process_topup_amount(message, state, (message.text or "").strip(), message.from_user.id)
 
 
 @dp.callback_query(F.data == "menu:deals")
