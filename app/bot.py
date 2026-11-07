@@ -213,7 +213,7 @@ def admin_deal_keyboard(deal_id: int) -> InlineKeyboardMarkup:
 
 
 def user_label(user: User) -> str:
-    name = re.sub(r"\\s+", " ", (user.full_name or "").strip()) or "Без имени"
+    name = re.sub(r"\s+", " ", (user.full_name or "").strip()) or "Без имени"
     username = f"@{user.username}" if user.username else "без username"
     return f"{name} ({username}, ID {user.telegram_id})"
 
@@ -248,7 +248,7 @@ def seller_picker_keyboard(users: list[User]) -> InlineKeyboardMarkup:
     rows = []
     for user in users:
         title = (user.full_name or (f"@{user.username}" if user.username else str(user.telegram_id)))
-        title = re.sub(r"\\s+", " ", title).strip()[:28]
+        title = re.sub(r"\s+", " ", title).strip()[:28]
         suffix = f" · @{user.username}" if user.username else f" · ID {user.telegram_id}"
         rows.append([ui_button(
             text=f"👤 {title}{suffix}"[:60],
