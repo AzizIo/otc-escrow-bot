@@ -310,11 +310,17 @@ def seller_picker_keyboard(users: list[User]) -> InlineKeyboardMarkup:
 def deal_amount_keyboard() -> InlineKeyboardMarkup:
     amounts = ("10", "25", "50", "100", "250", "500")
     rows = [
-        [ui_button(text=f"💵 {amount} USDT", callback_data=f"create:amount:{amount}", style="success")]
-        for amount in amounts
+        [
+            ui_button(text=f"💵 {amounts[index]} USDT", callback_data=f"create:amount:{amounts[index]}", style="success"),
+            ui_button(text=f"💵 {amounts[index + 1]} USDT", callback_data=f"create:amount:{amounts[index + 1]}", style="success"),
+        ]
+        for index in range(0, len(amounts), 2)
     ]
-    rows.append([ui_button(text="⌨️ Другая сумма", callback_data="create:amount:custom")])
-    rows.append([ui_button(text="✖️ Отмена", callback_data="create:cancel", style="danger")])
+    rows.extend([
+        [ui_button(text="⌨️ Другая сумма", callback_data="create:amount:custom")],
+        [ui_button(text="👤 Изменить продавца", callback_data="create:edit_seller")],
+        [ui_button(text="✖️ Отмена", callback_data="create:cancel", style="danger")],
+    ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -336,11 +342,16 @@ async def show_seller_picker(
 
 
 async def show_amount_step(message: Message) -> None:
-    await message.answer(
-        "💰 <b>Шаг 2 из 3 — сумма сделки</b>\n\n"
-        "Выбери готовую сумму или нажми «Другая сумма».",
-        parse_mode="HTML",
+    await send_hero(
+        message,
+        f"{news_emoji('money')} <b>НОВАЯ СДЕЛКА · ШАГ 2/3</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "<b>Укажи сумму сделки</b>\n"
+        "Выбери один из быстрых вариантов или введи собственную сумму.\n\n"
+        "<blockquote>Сумма будет зафиксирована в условиях предложения. Покупатель резервирует её только после принятия сделки продавцом.</blockquote>\n"
+        "💡 <i>Можно указать сумму с точностью до 0,01 USDT.</i>",
         reply_markup=deal_amount_keyboard(),
+        photo_url=DEAL_BANNER_URL,
     )
 
 
@@ -703,13 +714,19 @@ async def create_choose_amount(callback: CallbackQuery, state: FSMContext) -> No
     await state.update_data(amount=raw)
     await state.set_state(DealCreation.description)
     await callback.answer(f"Сумма {raw} USDT выбрана.")
-    await callback.message.answer(
-        "📝 <b>Шаг 3 из 3 — описание</b>\n\n"
-        "Кратко опиши товар или услугу (до 1000 символов).",
-        parse_mode="HTML",
+    await send_hero(
+        callback.message,
+        f"{news_emoji('info')} <b>НОВАЯ СДЕЛКА · ШАГ 3/3</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "<b>Опиши предмет сделки</b>\n"
+        "Укажи, что именно должен передать или выполнить продавец. Чем конкретнее условия, тем проще разрешить возможные разногласия.\n\n"
+        "<blockquote>Например: «Разработка Telegram-бота по ТЗ, передача исходного кода и инструкции по запуску».</blockquote>\n"
+        "📝 <i>От 1 до 1000 символов.</i>",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [ui_button(text="✖️ Отмена", callback_data="create:cancel", style="danger")]
+            [ui_button(text="👤 Изменить продавца", callback_data="create:edit_seller")],
+            [ui_button(text="✖️ Отмена", callback_data="create:cancel", style="danger")],
         ]),
+        photo_url=DEAL_BANNER_URL,
     )
 
 
@@ -1127,13 +1144,19 @@ async def receive_deal_amount(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(amount=str(amount))
     await state.set_state(DealCreation.description)
-    await message.answer(
-        "📝 <b>Шаг 3 из 3 — описание</b>\n\n"
-        "Кратко опиши товар или услугу (до 1000 символов).",
-        parse_mode="HTML",
+    await send_hero(
+        message,
+        f"{news_emoji('info')} <b>НОВАЯ СДЕЛКА · ШАГ 3/3</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "<b>Опиши предмет сделки</b>\n"
+        "Укажи, что именно должен передать или выполнить продавец. Чем конкретнее условия, тем проще разрешить возможные разногласия.\n\n"
+        "<blockquote>Например: «Разработка Telegram-бота по ТЗ, передача исходного кода и инструкции по запуску».</blockquote>\n"
+        "📝 <i>От 1 до 1000 символов.</i>",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [ui_button(text="✖️ Отмена", callback_data="create:cancel", style="danger")]
+            [ui_button(text="👤 Изменить продавца", callback_data="create:edit_seller")],
+            [ui_button(text="✖️ Отмена", callback_data="create:cancel", style="danger")],
         ]),
+        photo_url=DEAL_BANNER_URL,
     )
 
 
@@ -1146,20 +1169,23 @@ async def receive_deal_description(message: Message, state: FSMContext) -> None:
     await state.update_data(description=description)
     data = await state.get_data()
     await state.set_state(DealCreation.confirm)
-    await message.answer(
-        "🧾 <b>Проверь условия сделки</b>\n\n"
-        f"👤 Продавец: {html.escape(data.get('seller_label', str(data['seller_id'])))}\n"
-        f"💰 Сумма: <b>{Decimal(data['amount']):.2f} USDT</b>\n"
-        f"📦 Условия: {html.escape(description)}\n\n"
-        "Всё верно? После подтверждения продавцу придёт уведомление.",
-        parse_mode="HTML",
+    await send_hero(
+        message,
+        f"{news_emoji('check')} <b>ПРОВЕРКА УСЛОВИЙ СДЕЛКИ</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        f"👤 <b>Продавец</b>\n<code>{html.escape(data.get('seller_label', str(data['seller_id'])))}</code>\n\n"
+        f"{news_emoji('money')} <b>Сумма</b>\n<b>{Decimal(data['amount']):.2f} USDT</b>\n\n"
+        "📦 <b>Предмет сделки</b>\n"
+        f"<blockquote>{html.escape(description)}</blockquote>\n"
+        "Проверь данные. После создания продавцу придёт предложение, а резервирование средств произойдёт только после его согласия.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [ui_button(text="✅ Создать сделку", callback_data="create:confirm", style="success")],
+            [ui_button(text="✅ Подтвердить и отправить", callback_data="create:confirm", style="success")],
             [ui_button(text="💰 Изменить сумму", callback_data="create:edit_amount")],
             [ui_button(text="👤 Изменить продавца", callback_data="create:edit_seller")],
-            [ui_button(text="📝 Изменить описание", callback_data="create:edit")],
+            [ui_button(text="📝 Изменить условия", callback_data="create:edit")],
             [ui_button(text="✖️ Отмена", callback_data="create:cancel", style="danger")],
         ]),
+        photo_url=DEAL_BANNER_URL,
     )
 
 
@@ -1170,7 +1196,7 @@ async def edit_deal_amount(callback: CallbackQuery, state: FSMContext) -> None:
     await show_amount_step(callback.message)
 
 
-@dp.callback_query(F.data == "create:edit_seller", DealCreation.confirm)
+@dp.callback_query(F.data == "create:edit_seller")
 async def edit_deal_seller(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await show_seller_picker(callback.message, state, callback.from_user.id)
