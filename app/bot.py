@@ -223,10 +223,25 @@ def deal_keyboard(deal_id: int, *actions: str) -> InlineKeyboardMarkup:
 def admin_deal_keyboard(deal_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [ui_button(text="💸 Выплатить продавцу", callback_data=f"admin:release:{deal_id}")],
-            [ui_button(text="↩️ Вернуть покупателю", callback_data=f"admin:refund:{deal_id}")],
+            [ui_button(text="🔎 Открыть карточку спора", callback_data=f"admincase:view:{deal_id}")],
+            [ui_button(text="💸 Решение: выплатить продавцу", callback_data=f"admincase:confirm:release:{deal_id}", style="success")],
+            [ui_button(text="↩️ Решение: вернуть покупателю", callback_data=f"admincase:confirm:refund:{deal_id}", style="danger")],
         ]
     )
+
+
+def admin_case_decision_keyboard(deal_id: int, action: str) -> InlineKeyboardMarkup:
+    label = "выплатить продавцу" if action == "release" else "вернуть покупателю"
+    style = "success" if action == "release" else "danger"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [ui_button(
+            text=f"Подтвердить: {label}",
+            callback_data=f"admincase:execute:{action}:{deal_id}",
+            style=style,
+        )],
+        [ui_button(text="↩️ Назад к карточке", callback_data=f"admincase:view:{deal_id}")],
+        [ui_button(text="📂 Очередь споров", callback_data="adminpanel:disputes")],
+    ])
 
 
 def deal_card(
@@ -1481,6 +1496,7 @@ async def resolve_refund(message: Message) -> None:
 
 def admin_main_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
+        [ui_button(text="⚠️ Очередь споров", callback_data="adminpanel:disputes")],
         [ui_button(text="👥 Пользователи", callback_data="adminpanel:find")],
         [ui_button(text="📊 Общая статистика", callback_data="adminpanel:stats")],
         [ui_button(text="⚙️ Crypto Pay", callback_data="adminpanel:cryptopay")],
@@ -1770,6 +1786,211 @@ async def admin_broadcast_cancel(callback: CallbackQuery, state: FSMContext) -> 
     await state.clear()
     await callback.answer("Рассылка отменена.")
     await callback.message.answer("Рассылка отменена.", reply_markup=admin_main_keyboard())
+
+async def show_admin_disputes_page(message: Message, page: int = 0) -> None:
+    page_size = 7
+    async with SessionFactory() as session:
+        total = await session.scalar(
+            select(func.count(Deal.id)).where(Deal.status == "disputed")
+        ) or 0
+        pages = max(1, (total + page_size - 1) // page_size)
+        page = min(max(page, 0), pages - 1)
+        deals = list((await session.scalars(
+            select(Deal)
+            .where(Deal.status == "disputed")
+            .order_by(Deal.updated_at.desc(), Deal.id.desc())
+            .offset(page * page_size)
+            .limit(page_size)
+        )).all())
+        rows = []
+        for deal in deals:
+            buyer = await session.get(User, deal.buyer_id)
+            seller = await session.get(User, deal.seller_id)
+            buyer_name = buyer.full_name if buyer and buyer.full_name else str(buyer.telegram_id if buyer else deal.buyer_id)
+            seller_name = seller.full_name if seller and seller.full_name else str(seller.telegram_id if seller else deal.seller_id)
+            rows.append([ui_button(
+                text=f"⚠️ #{deal.id} · {deal.amount:.2f} USDT · {buyer_name[:16]} → {seller_name[:16]}"[:60],
+                callback_data=f"admincase:view:{deal.id}",
+                style="danger",
+            )])
+    if not rows:
+        rows.append([ui_button(text="✅ Открытых споров нет", callback_data="adminpanel:disputes")])
+    nav = []
+    if page > 0:
+        nav.append(ui_button(text="⬅️ Назад", callback_data=f"admincases:page:{page - 1}"))
+    if page < pages - 1:
+        nav.append(ui_button(text="Вперёд ➡️", callback_data=f"admincases:page:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([ui_button(text="⬅️ Админ-панель", callback_data="adminpanel:home")])
+    await send_hero(
+        message,
+        f"{news_emoji('warning')} <b>ОЧЕРЕДЬ СПОРОВ</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        f"Открытых споров: <b>{total}</b>\n"
+        f"Страница: <b>{page + 1}/{pages}</b>\n\n"
+        "Открой карточку, проверь условия и участников, затем выбери решение. "
+        "Перед изменением баланса бот запросит дополнительное подтверждение.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        photo_url=ADMIN_BANNER_URL,
+    )
+
+
+@dp.callback_query(F.data == "adminpanel:disputes")
+async def admin_disputes_open(callback: CallbackQuery) -> None:
+    if callback.from_user.id != settings.superadmin_id:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    await callback.answer()
+    await show_admin_disputes_page(callback.message, 0)
+
+
+@dp.callback_query(F.data.startswith("admincases:page:"))
+async def admin_disputes_page(callback: CallbackQuery) -> None:
+    if callback.from_user.id != settings.superadmin_id:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    try:
+        page = int(callback.data.rsplit(":", 1)[1])
+    except ValueError:
+        await callback.answer("Некорректная страница.", show_alert=True)
+        return
+    await callback.answer()
+    await show_admin_disputes_page(callback.message, page)
+
+
+@dp.callback_query(F.data.startswith("admincase:view:"))
+async def admin_case_view(callback: CallbackQuery) -> None:
+    if callback.from_user.id != settings.superadmin_id:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    try:
+        deal_id = int(callback.data.rsplit(":", 1)[1])
+    except ValueError:
+        await callback.answer("Некорректный номер сделки.", show_alert=True)
+        return
+    async with SessionFactory() as session:
+        deal = await session.get(Deal, deal_id)
+        if deal is None:
+            await callback.answer("Сделка не найдена.", show_alert=True)
+            return
+        buyer, seller = await participant_labels(session, deal)
+        status = str(deal.status)
+        amount = deal.amount
+        description = deal.description
+    await callback.answer()
+    if status != "disputed":
+        await callback.message.answer(
+            f"ℹ️ Сделка #{deal_id} уже не находится в статусе спора: <b>{html.escape(status)}</b>.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [ui_button(text="📂 Очередь споров", callback_data="adminpanel:disputes")],
+            ]),
+        )
+        return
+    await callback.message.answer(
+        deal_card(
+            title="Карточка спорной сделки",
+            deal_id=deal_id,
+            buyer=buyer,
+            seller=seller,
+            amount=amount,
+            description=description,
+            footer="Изучи ситуацию и выбери решение. Решение повлияет на внутренний баланс участников.",
+            status_emoji="warning",
+        ),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [ui_button(text="💸 Выплатить продавцу", callback_data=f"admincase:confirm:release:{deal_id}", style="success")],
+            [ui_button(text="↩️ Вернуть покупателю", callback_data=f"admincase:confirm:refund:{deal_id}", style="danger")],
+            [ui_button(text="📂 Очередь споров", callback_data="adminpanel:disputes")],
+        ]),
+    )
+
+
+@dp.callback_query(F.data.startswith("admincase:confirm:"))
+async def admin_case_confirm(callback: CallbackQuery) -> None:
+    if callback.from_user.id != settings.superadmin_id:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    try:
+        _, _, action, raw_id = callback.data.split(":")
+        deal_id = int(raw_id)
+        if action not in ("release", "refund"):
+            raise ValueError
+    except ValueError:
+        await callback.answer("Некорректное решение.", show_alert=True)
+        return
+    async with SessionFactory() as session:
+        deal = await session.get(Deal, deal_id)
+        if deal is None or deal.status != "disputed":
+            await callback.answer("Спор уже закрыт или сделка не найдена.", show_alert=True)
+            return
+        amount = deal.amount
+    direction = "зачислена продавцу" if action == "release" else "возвращена покупателю"
+    await callback.answer()
+    await callback.message.answer(
+        f"{news_emoji('warning')} <b>Подтверждение решения</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        f"Сделка: <b>#{deal_id}</b>\n"
+        f"Сумма: <b>{amount:.2f} USDT</b>\n"
+        f"Результат: <b>{direction}</b>\n\n"
+        "<blockquote>После подтверждения внутренний баланс будет изменён, а спор закрыт. "
+        "Отменить проведённую операцию через эту кнопку нельзя.</blockquote>",
+        parse_mode="HTML",
+        reply_markup=admin_case_decision_keyboard(deal_id, action),
+    )
+
+
+@dp.callback_query(F.data.startswith("admincase:execute:"))
+async def admin_case_execute(callback: CallbackQuery) -> None:
+    if callback.from_user.id != settings.superadmin_id:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    try:
+        _, _, action, raw_id = callback.data.split(":")
+        deal_id = int(raw_id)
+        if action not in ("release", "refund"):
+            raise ValueError
+        async with SessionFactory() as session, session.begin():
+            deal = await session.get(Deal, deal_id, with_for_update=True)
+            if deal is None or deal.status != "disputed":
+                raise ValueError("Спор уже закрыт или сделка не найдена.")
+            deal = await admin_resolve(
+                session,
+                deal_id=deal_id,
+                actor_telegram_id=callback.from_user.id,
+                release_to_seller=(action == "release"),
+            )
+            buyer_id, seller_id = await participant_ids(session, deal)
+            amount = deal.amount
+        result = "зачислена продавцу" if action == "release" else "возвращена покупателю"
+        await callback.answer("Решение применено.")
+        await callback.message.edit_reply_markup(reply_markup=None)
+        for telegram_id in {buyer_id, seller_id}:
+            try:
+                await callback.bot.send_message(
+                    telegram_id,
+                    f"Решение администратора по сделке #{deal_id}: сумма {amount:.2f} USDT {result}.",
+                )
+            except TelegramAPIError:
+                logging.getLogger(__name__).warning(
+                    "Could not notify participant user_id=%s after dispute resolution deal_id=%s",
+                    telegram_id, deal_id,
+                )
+        await callback.message.answer(
+            f"✅ Спор по сделке #{deal_id} закрыт. Сумма {amount:.2f} USDT {result}.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [ui_button(text="📂 К очереди споров", callback_data="adminpanel:disputes")],
+                [ui_button(text="🏠 Админ-панель", callback_data="adminpanel:home")],
+            ]),
+        )
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+    except SQLAlchemyError:
+        logging.getLogger(__name__).exception("Admin dispute resolution failed deal_id=%s", callback.data)
+        await callback.answer("Не удалось применить решение.", show_alert=True)
+
 
 @dp.callback_query(F.data == "adminpanel:home")
 async def admin_panel_home(callback: CallbackQuery, state: FSMContext) -> None:
