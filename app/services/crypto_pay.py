@@ -9,6 +9,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.db import SessionFactory
 from app.models import Account, AppSetting, CryptoDeposit, LedgerEntry, User
+from app.services.payment_validation import invoice_matches_deposit
 
 logger = logging.getLogger(__name__)
 POLL_INTERVAL_SECONDS = 15
@@ -135,13 +136,7 @@ async def _credit_paid_invoice(invoice: dict) -> tuple[int, Decimal, str] | None
             return None
 
         expected_amount = deposit.amount
-        received_amount = Decimal(str(invoice.get("amount", "0")))
-        is_valid = (
-            invoice.get("status") == "paid"
-            and invoice.get("currency_type") == "crypto"
-            and invoice.get("asset") == "USDT"
-            and received_amount == expected_amount
-        )
+        is_valid = invoice_matches_deposit(invoice, expected_amount)
         user = await session.get(User, deposit.user_id)
         if user is None:
             raise RuntimeError(f"User for Crypto Pay invoice {invoice_id} was not found")
